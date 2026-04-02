@@ -1,0 +1,671 @@
+---
+title: "Kotlin Coroutines"
+description: "Interview questions and answers on Kotlin Coroutines including suspend functions, dispatchers, scope, exception handling, and structured concurrency."
+---
+
+Kotlin Coroutines are the standard approach to asynchronous programming in Android. This page covers the concepts that come up most frequently in interviews — from the basics of suspend functions to advanced patterns like structured concurrency and exception propagation.
+
+<AccordionGroup>
+  <Accordion title="What are Kotlin Coroutines and why use them over threads?">
+    Coroutines are a concurrency design pattern that allows you to write asynchronous, non-blocking code in a sequential style. Unlike threads, coroutines are **lightweight**: you can run tens of thousands of coroutines on a small number of threads without significant overhead.
+
+    Key advantages over threads:
+
+    - **Lightweight:** Coroutines are not bound to a thread. They can be suspended and resumed on different threads without the cost of OS-level thread context switching.
+    - **Structured concurrency:** Coroutines follow a parent-child hierarchy. If a parent is cancelled, all children are cancelled automatically — preventing leaks.
+    - **Sequential-looking code:** `suspend` functions let you write async logic that reads top-to-bottom, eliminating callback hell.
+    - **First-class cancellation:** Coroutines support cooperative cancellation via `Job` and `CancellationException`.
+
+    ```kotlin
+    // Threads — verbose, hard to cancel, expensive
+    Thread {
+        val data = fetchFromNetwork()  // blocks the thread
+        runOnUiThread { updateUi(data) }
+    }.start()
+
+    // Coroutines — clean, cancellable, efficient
+    viewModelScope.launch {
+        val data = fetchFromNetwork()  // suspends, does not block
+        updateUi(data)
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="What is a suspend function?">
+    A `suspend` function is a function that can be **paused and resumed** without blocking the thread it runs on. When a suspend function reaches a suspension point (such as a network call or `delay()`), it releases the underlying thread so it can do other work. When the result is ready, the coroutine resumes on the appropriate thread.
+
+    - Suspend functions can only be called from within a coroutine or another suspend function.
+    - Under the hood, the compiler transforms suspend functions using a state machine with a `Continuation` parameter — no magic, just generated code.
+
+    ```kotlin
+    // A suspend function — looks synchronous, behaves asynchronously
+    suspend fun fetchUser(id: String): User {
+        return withContext(Dispatchers.IO) {
+            apiService.getUser(id)  // network call — suspends here
+        }
+    }
+
+    // Calling it from a coroutine
+    viewModelScope.launch {
+        val user = fetchUser("123")  // suspends, does not block the main thread
+        showUser(user)
+    }
+    ```
+
+    <Note>
+      The `suspend` keyword does not make a function run on a background thread. It makes it eligible to be suspended. You still need to use the right dispatcher (e.g., `Dispatchers.IO`) to move work off the main thread.
+    </Note>
+  </Accordion>
+
+  <Accordion title="launch vs async: differences and when to use each">
+    Both `launch` and `async` start a new coroutine, but they differ in what they return and how you use them.
+
+    **`launch`** — Fire and forget. Returns a `Job`. Use when you do not need a result from the coroutine.
+
+    **`async`** — Returns a `Deferred<T>`. Use when you need a result. Call `.await()` to get it (suspending until the result is ready).
+
+    ```kotlin
+    // launch — fire and forget, no result needed
+    viewModelScope.launch {
+        saveToDatabase(user)
+        logEvent("user_saved")
+    }
+
+    // async — when you need a return value
+    viewModelScope.launch {
+        val deferred: Deferred<User> = async { fetchUser("123") }
+        val user = deferred.await()  // suspends here until result is ready
+        showUser(user)
+    }
+
+    // async used to run two operations in parallel
+    viewModelScope.launch {
+        val userDeferred = async { fetchUser("123") }
+        val postsDeferred = async { fetchPosts("123") }
+
+        val user = userDeferred.await()
+        val posts = postsDeferred.await()
+        showProfile(user, posts)
+    }
+    ```
+
+    <Tip>
+      If you need to run two independent suspend calls and wait for both, use `async` + `await`. If one result does not depend on the other, start both `async` blocks before calling `await()` on either — this runs them in parallel.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="withContext: what it does and how it differs from async/await">
+    `withContext` switches the coroutine to a different dispatcher for the duration of its block, then returns the result and switches back. It is **sequential** — it suspends the current coroutine and resumes when the block is done.
+
+    Use `withContext` when you want to run a single operation on a different thread and get its result. Use `async`/`await` when you want to run multiple operations **concurrently**.
+
+    ```kotlin
+    // withContext — switches dispatcher, sequential, returns a value
+    suspend fun loadUser(): User {
+        return withContext(Dispatchers.IO) {
+            database.getUser()  // runs on IO thread
+        }
+        // automatically switches back to the calling dispatcher
+    }
+
+    // async/await — concurrent, you manage the Deferred
+    suspend fun loadProfileConcurrently(): Profile {
+        return coroutineScope {
+            val user = async(Dispatchers.IO) { database.getUser() }
+            val prefs = async(Dispatchers.IO) { database.getPrefs() }
+            Profile(user.await(), prefs.await())  // both run in parallel
+        }
+    }
+    ```
+
+    `withContext` does not create a new coroutine — it reuses the current one with a different context. `async` always creates a new child coroutine.
+  </Accordion>
+
+  <Accordion title="Dispatchers: Main, IO, Default, Unconfined — when to use each">
+    Dispatchers determine which thread(s) a coroutine runs on.
+
+    | Dispatcher | Thread pool | When to use |
+    |---|---|---|
+    | `Dispatchers.Main` | Main/UI thread | UI updates, ViewModel logic, LiveData observation |
+    | `Dispatchers.IO` | Shared pool (up to 64 threads) | Network calls, file I/O, database operations |
+    | `Dispatchers.Default` | CPU-count threads | CPU-intensive work: sorting, parsing, computation |
+    | `Dispatchers.Unconfined` | No specific thread | Rarely — resumes on whatever thread is available |
+
+    ```kotlin
+    // IO — network or database
+    withContext(Dispatchers.IO) {
+        val response = apiService.fetchData()
+        database.insert(response)
+    }
+
+    // Default — CPU work
+    withContext(Dispatchers.Default) {
+        val sorted = largeList.sortedBy { it.score }
+    }
+
+    // Main — update UI after background work
+    withContext(Dispatchers.Main) {
+        textView.text = result
+    }
+    ```
+
+    <Warning>
+      Avoid `Dispatchers.Unconfined` in production code. It resumes in whatever thread last resumed the coroutine, making behavior unpredictable.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="CoroutineScope: what it is and lifecycle">
+    A `CoroutineScope` defines the **lifecycle boundary** for coroutines. Any coroutine launched within a scope is a child of that scope. When the scope is cancelled, all child coroutines are cancelled.
+
+    - `viewModelScope` — tied to the ViewModel's lifecycle; cancelled when ViewModel is cleared.
+    - `lifecycleScope` — tied to a Lifecycle owner (Activity/Fragment); cancelled when destroyed.
+    - `GlobalScope` — lives for the entire app lifetime; generally avoid in Android apps.
+    - Custom scope — use `CoroutineScope(Job() + Dispatchers.Main)` when you need manual control.
+
+    ```kotlin
+    class MyViewModel : ViewModel() {
+        init {
+            // viewModelScope is automatically cancelled in onCleared()
+            viewModelScope.launch {
+                loadData()
+            }
+        }
+    }
+
+    // Custom scope with manual lifecycle
+    class MyRepository {
+        private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+        fun startSync() {
+            scope.launch { syncData() }
+        }
+
+        fun cleanup() {
+            scope.cancel()  // cancel all coroutines in this scope
+        }
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="CoroutineContext: what it contains">
+    `CoroutineContext` is a set of elements that define the behavior of a coroutine. It is an indexed set where each element has a unique key.
+
+    The four main elements:
+
+    | Element | Key | Purpose |
+    |---|---|---|
+    | `Job` | `Job` | Tracks lifecycle, cancellation |
+    | `CoroutineDispatcher` | `ContinuationInterceptor` | Determines the thread |
+    | `CoroutineName` | `CoroutineName` | Debug label |
+    | `CoroutineExceptionHandler` | `CoroutineExceptionHandler` | Handles uncaught exceptions |
+
+    ```kotlin
+    val context = Dispatchers.IO +
+        CoroutineName("DataFetcher") +
+        CoroutineExceptionHandler { _, throwable ->
+            Log.e("Coroutine", "Unhandled exception", throwable)
+        }
+
+    val scope = CoroutineScope(context + SupervisorJob())
+
+    scope.launch {
+        // This coroutine has: IO dispatcher, name, exception handler, supervisor job
+        fetchData()
+    }
+    ```
+
+    Contexts combine with `+`. Child coroutines inherit their parent's context but can override individual elements.
+  </Accordion>
+
+  <Accordion title="Job: what it is, job.cancel() vs scope.cancel()">
+    A `Job` represents a coroutine's lifecycle — it can be in states: New, Active, Completing, Completed, Cancelling, or Cancelled. It tracks parent-child relationships.
+
+    **`job.cancel()`** — Cancels that specific coroutine and all of its children. The parent scope continues running.
+
+    **`scope.cancel()`** — Cancels the scope and every coroutine running in it. The scope becomes unusable.
+
+    ```kotlin
+    val scope = CoroutineScope(Dispatchers.IO)
+
+    val job1 = scope.launch { task1() }
+    val job2 = scope.launch { task2() }
+
+    // Cancel only job1, job2 keeps running
+    job1.cancel()
+
+    // Cancel everything in the scope
+    scope.cancel()  // job2 is also cancelled; scope is done
+
+    // Wait for a job to complete
+    scope.launch {
+        val job = launch { fetchData() }
+        job.join()  // suspends until fetchData() is done
+        processResult()
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="lifecycleScope vs viewModelScope vs GlobalScope">
+    These are pre-built coroutine scopes for common Android use cases.
+
+    **`lifecycleScope`** — Extension on `LifecycleOwner` (Activity, Fragment). Cancels when the lifecycle reaches `DESTROYED`. Use for UI-related coroutines tied to a specific screen.
+
+    **`viewModelScope`** — Extension on `ViewModel`. Cancels when `onCleared()` is called (when the associated screen is permanently destroyed, not on rotation). Use for ViewModel-driven operations.
+
+    **`GlobalScope`** — Application-wide scope that is never cancelled. Avoid in Android: it outlives Activities and ViewModels, leading to leaks and unintentional work.
+
+    ```kotlin
+    // lifecycleScope — activity/fragment level
+    class MyActivity : AppCompatActivity() {
+        override fun onCreate(savedInstanceState: Bundle?) {
+            super.onCreate(savedInstanceState)
+            lifecycleScope.launch {
+                repeatOnLifecycle(Lifecycle.State.STARTED) {
+                    viewModel.uiState.collect { state -> render(state) }
+                }
+            }
+        }
+    }
+
+    // viewModelScope — survives rotation
+    class MyViewModel : ViewModel() {
+        init {
+            viewModelScope.launch {
+                repository.fetchData()
+            }
+        }
+    }
+    ```
+
+    <Warning>
+      Never use `GlobalScope` in production Android code unless you have a specific reason and are managing cancellation yourself.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="suspendCoroutine and suspendCancellableCoroutine: converting callbacks to coroutines">
+    These functions let you wrap callback-based APIs in a suspend function, making them usable from coroutines.
+
+    **`suspendCoroutine`** — Basic adapter. Does not support cancellation.
+
+    **`suspendCancellableCoroutine`** — Preferred. Supports cancellation: if the coroutine is cancelled, you can clean up the underlying callback (e.g., cancel an HTTP call).
+
+    ```kotlin
+    // Wrapping a callback API with suspendCancellableCoroutine
+    suspend fun Location.awaitLastLocation(): Location =
+        suspendCancellableCoroutine { continuation ->
+            val callback = object : LocationCallback() {
+                override fun onLocationResult(result: LocationResult) {
+                    continuation.resume(result.lastLocation!!)
+                }
+            }
+
+            requestLocationUpdates(locationRequest, callback, Looper.getMainLooper())
+
+            // Clean up when the coroutine is cancelled
+            continuation.invokeOnCancellation {
+                removeLocationUpdates(callback)
+            }
+        }
+
+    // Now usable as a suspend function
+    val location = fusedLocationClient.awaitLastLocation()
+    ```
+  </Accordion>
+
+  <Accordion title="coroutineScope vs supervisorScope: exception propagation">
+    Both create a new scope for structured concurrency, but they differ in how exceptions from child coroutines propagate.
+
+    **`coroutineScope`** — If any child fails, the exception propagates to the parent and all siblings are cancelled. All-or-nothing behavior.
+
+    **`supervisorScope`** — If a child fails, only that child is cancelled. Other siblings continue running. The exception does not automatically propagate to the parent.
+
+    ```kotlin
+    // coroutineScope — one failure cancels all siblings
+    suspend fun loadAll() = coroutineScope {
+        val a = async { fetchA() }
+        val b = async { fetchB() }  // if fetchA() throws, fetchB() is cancelled too
+        listOf(a.await(), b.await())
+    }
+
+    // supervisorScope — children fail independently
+    suspend fun loadAllIndependently() = supervisorScope {
+        val a = async { fetchA() }
+        val b = async { fetchB() }  // fetchA() failing does not affect fetchB()
+
+        buildList {
+            try { add(a.await()) } catch (e: Exception) { /* handle */ }
+            try { add(b.await()) } catch (e: Exception) { /* handle */ }
+        }
+    }
+    ```
+
+    Use `supervisorScope` when child tasks are independent and you want to handle their failures individually. Use `coroutineScope` when all children are required for the result to be valid.
+  </Accordion>
+
+  <Accordion title="runBlocking: what it does and when to use it">
+    `runBlocking` **blocks the calling thread** until all coroutines in its block complete. It bridges blocking and non-blocking code.
+
+    Common uses:
+    - **Unit tests** — run suspend functions from a regular test function
+    - **`main()` functions** — entry points that need to call suspend code
+    - Bridging legacy blocking code with coroutine-based code
+
+    ```kotlin
+    // Unit test
+    @Test
+    fun testFetchUser() = runBlocking {
+        val user = repository.fetchUser("123")
+        assertEquals("Alice", user.name)
+    }
+
+    // main() entry point
+    fun main() = runBlocking {
+        val result = suspendingOperation()
+        println(result)
+    }
+    ```
+
+    <Warning>
+      Never use `runBlocking` on the main thread in production Android code. It blocks the UI thread, causing ANRs. It is intended for tests and top-level entry points only.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="Suspending vs blocking: the key difference">
+    The distinction is what happens to the **thread** when waiting.
+
+    **Blocking** — The thread is held and cannot do any other work. If you block the main thread, the UI freezes.
+
+    **Suspending** — The coroutine is paused, but the thread is released and can execute other coroutines. The thread stays busy; only the coroutine "waits."
+
+    ```kotlin
+    // Blocking — Thread.sleep() holds the thread
+    fun blockingExample() {
+        Thread.sleep(2000)  // thread is blocked for 2 seconds
+        println("Done")
+    }
+
+    // Suspending — delay() releases the thread
+    suspend fun suspendingExample() {
+        delay(2000)  // thread is free; coroutine is suspended for 2 seconds
+        println("Done")
+    }
+
+    // In a coroutine: use delay(), not Thread.sleep()
+    viewModelScope.launch {
+        delay(2000)         // correct — does not block the main thread
+        // Thread.sleep(2000)  // wrong — blocks the main thread, causes ANR
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="Exception handling: try/catch, CoroutineExceptionHandler, SupervisorJob">
+    Coroutines have three mechanisms for exception handling:
+
+    **1. `try/catch` inside a coroutine** — Handles exceptions locally. Works for both `launch` and `async`.
+
+    ```kotlin
+    viewModelScope.launch {
+        try {
+            val data = fetchData()
+            showData(data)
+        } catch (e: IOException) {
+            showError(e.message)
+        }
+    }
+    ```
+
+    **2. `CoroutineExceptionHandler`** — A last-resort handler for uncaught exceptions in `launch`-started coroutines. Does not prevent cancellation of the scope.
+
+    ```kotlin
+    val handler = CoroutineExceptionHandler { _, throwable ->
+        Log.e("Coroutine", "Unhandled exception: ${throwable.message}")
+    }
+
+    val scope = CoroutineScope(Dispatchers.Main + handler)
+    scope.launch {
+        fetchData()  // if this throws and is not caught, handler is invoked
+    }
+    ```
+
+    **3. `SupervisorJob`** — Changes exception propagation so a failing child does not cancel its siblings or parent. Used with `supervisorScope` or a custom scope.
+
+    ```kotlin
+    // With SupervisorJob: child failures are isolated
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO + handler)
+    scope.launch { task1() }  // if task1 fails, task2 is unaffected
+    scope.launch { task2() }
+    ```
+
+    <Note>
+      For `async`, wrapping `await()` in try/catch is the recommended pattern. `CoroutineExceptionHandler` does not catch exceptions from `async` — only from `launch`.
+    </Note>
+  </Accordion>
+
+  <Accordion title="Structured concurrency: what it means and why it matters">
+    Structured concurrency is the principle that **coroutines must complete before their scope does**, and cancellation/failure flows through the parent-child hierarchy automatically.
+
+    What this guarantees:
+
+    - If a parent scope is cancelled, all child coroutines are cancelled.
+    - If a child coroutine fails (in `coroutineScope`), the parent and siblings are cancelled.
+    - You cannot "lose" a coroutine — it always has an owner.
+
+    ```kotlin
+    // Without structured concurrency (bad) — fire and forget, can leak
+    fun loadData() {
+        GlobalScope.launch { fetchData() }  // no lifecycle binding, can't cancel
+    }
+
+    // With structured concurrency (good)
+    class MyViewModel : ViewModel() {
+        fun loadData() {
+            viewModelScope.launch {
+                // if ViewModel is cleared, this is cancelled automatically
+                val result = fetchData()
+                _uiState.value = result
+            }
+        }
+    }
+    ```
+
+    Structured concurrency prevents the most common coroutine-related issues: leaking background work, missing cancellation, and uncaught exceptions silently disappearing.
+  </Accordion>
+
+  <Accordion title="Thread.sleep() vs delay(): why delay() is preferred in coroutines">
+    `Thread.sleep()` and `delay()` both pause execution for a duration, but they work very differently inside coroutines.
+
+    | | `Thread.sleep()` | `delay()` |
+    |---|---|---|
+    | Suspends | No — blocks the thread | Yes — releases the thread |
+    | Cancellable | No | Yes — throws `CancellationException` |
+    | Safe in coroutines | No | Yes |
+
+    ```kotlin
+    // Thread.sleep() in a coroutine — blocks the thread entirely
+    viewModelScope.launch(Dispatchers.Main) {
+        Thread.sleep(3000)  // blocks the main thread for 3 seconds — ANR risk
+        updateUi()
+    }
+
+    // delay() in a coroutine — suspends, releases the thread
+    viewModelScope.launch(Dispatchers.Main) {
+        delay(3000)  // main thread is free; resumes after 3 seconds
+        updateUi()
+    }
+    ```
+
+    `delay()` is also cancellable: if the coroutine is cancelled while `delay()` is in progress, it throws `CancellationException`, allowing clean shutdown.
+  </Accordion>
+
+  <Accordion title="yield() in coroutines: what it does">
+    `yield()` is a suspension point that **voluntarily gives up the thread** to allow other coroutines to run. It checks for cancellation and suspends the current coroutine so the scheduler can run another coroutine that is ready.
+
+    Use cases:
+    - In CPU-bound loops, to prevent a coroutine from monopolizing a thread.
+    - To make long-running computations cancellable at regular intervals.
+
+    ```kotlin
+    suspend fun processItems(items: List<Item>) {
+        for (item in items) {
+            processItem(item)  // CPU work
+            yield()  // check for cancellation, let other coroutines run
+        }
+    }
+
+    // Without yield(), if the scope is cancelled mid-loop,
+    // the coroutine only becomes cancellable at the next suspension point.
+    ```
+  </Accordion>
+
+  <Accordion title="Timeouts: withTimeout and withTimeoutOrNull">
+    Use `withTimeout` and `withTimeoutOrNull` to impose time limits on coroutine operations.
+
+    **`withTimeout`** — Throws `TimeoutCancellationException` if the block does not complete within the timeout.
+
+    **`withTimeoutOrNull`** — Returns `null` instead of throwing. Safer when a timeout is expected and should be handled gracefully.
+
+    ```kotlin
+    // withTimeout — throws on timeout
+    viewModelScope.launch {
+        try {
+            val result = withTimeout(5000L) {
+                fetchFromSlowApi()
+            }
+            showResult(result)
+        } catch (e: TimeoutCancellationException) {
+            showTimeoutError()
+        }
+    }
+
+    // withTimeoutOrNull — returns null on timeout
+    viewModelScope.launch {
+        val result = withTimeoutOrNull(5000L) {
+            fetchFromSlowApi()
+        }
+        if (result != null) showResult(result) else showTimeoutError()
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="Combining multiple coroutine results with async + awaitAll">
+    When you need to run multiple independent operations in parallel and wait for all results, use `async` + `awaitAll`.
+
+    ```kotlin
+    suspend fun fetchMultipleUsers(ids: List<String>): List<User> =
+        coroutineScope {
+            val deferred = ids.map { id ->
+                async(Dispatchers.IO) { apiService.getUser(id) }
+            }
+            deferred.awaitAll()  // suspends until all complete; throws if any fails
+        }
+
+    // With individual error handling per item
+    suspend fun fetchUsersWithFallback(ids: List<String>): List<User?> =
+        coroutineScope {
+            ids.map { id ->
+                async {
+                    try { apiService.getUser(id) } catch (e: Exception) { null }
+                }
+            }.awaitAll()
+        }
+    ```
+
+    `awaitAll()` is preferred over calling `.await()` in a loop because it starts waiting for all deferreds concurrently, and propagates the first exception immediately if one fails.
+  </Accordion>
+
+  <Accordion title="Running two coroutines in series vs parallel">
+    The order in which you call `async` and `await` determines whether coroutines run sequentially or in parallel.
+
+    ```kotlin
+    // Sequential — each operation waits for the previous to finish
+    suspend fun sequential(): Pair<User, Posts> {
+        val user = fetchUser()   // waits here
+        val posts = fetchPosts() // starts after fetchUser() completes
+        return Pair(user, posts)
+    }
+
+    // Parallel — both start immediately, then wait for both results
+    suspend fun parallel(): Pair<User, Posts> = coroutineScope {
+        val userDeferred = async { fetchUser() }   // starts immediately
+        val postsDeferred = async { fetchPosts() } // also starts immediately
+
+        val user = userDeferred.await()
+        val posts = postsDeferred.await()
+        Pair(user, posts)
+    }
+    ```
+
+    If `fetchUser()` and `fetchPosts()` each take 1 second, the sequential version takes ~2 seconds; the parallel version takes ~1 second.
+  </Accordion>
+
+  <Accordion title="Debounce using coroutines">
+    Debouncing ensures that a function is only called after a specified delay from the last invocation — useful for search input, button clicks, and other rapid-fire events.
+
+    ```kotlin
+    // Debounce using Flow (recommended approach)
+    class SearchViewModel : ViewModel() {
+        private val queryFlow = MutableStateFlow("")
+
+        val results = queryFlow
+            .debounce(300)  // wait 300ms after last emission
+            .distinctUntilChanged()
+            .flatMapLatest { query ->
+                if (query.isEmpty()) flowOf(emptyList())
+                else repository.search(query)
+            }
+            .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
+
+        fun onQueryChanged(query: String) {
+            queryFlow.value = query
+        }
+    }
+
+    // Manual debounce with a Job
+    class ClickHandler {
+        private var debounceJob: Job? = null
+
+        fun onButtonClick(scope: CoroutineScope) {
+            debounceJob?.cancel()
+            debounceJob = scope.launch {
+                delay(300)
+                performAction()
+            }
+        }
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="What happens if an exception is thrown in async but await() is never called?">
+    This is a subtle but important behavior. With a regular `Job` (not `SupervisorJob`), the exception propagates to the parent scope **at the point the exception occurs** — not when `await()` is called.
+
+    ```kotlin
+    val scope = CoroutineScope(Job() + Dispatchers.IO)
+
+    val deferred = scope.async {
+        throw RuntimeException("Something went wrong")  // exception occurs here
+    }
+
+    // Even if you never call deferred.await(), the exception propagates
+    // to the scope's Job and cancels the scope.
+    delay(1000)
+    // scope is cancelled by now due to the unhandled exception in async
+    ```
+
+    With `SupervisorJob`, the exception is contained in the `Deferred` and only surfaces when `await()` is called:
+
+    ```kotlin
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    val deferred = scope.async {
+        throw RuntimeException("Something went wrong")
+    }
+
+    // Exception is stored in the Deferred — won't propagate until await() is called
+    try {
+        deferred.await()  // exception is thrown here
+    } catch (e: RuntimeException) {
+        println("Caught: ${e.message}")
+    }
+    ```
+  </Accordion>
+</AccordionGroup>

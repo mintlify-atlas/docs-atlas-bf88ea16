@@ -1,0 +1,335 @@
+---
+title: "Dependency Injection"
+description: "Interview questions and answers on dependency injection in Android, covering Dagger 2 and Dagger-Hilt annotations, components, modules, scopes, and when to use each framework."
+keywords: ["Dagger", "Hilt", "dependency injection", "DI", "@Component", "@Module", "@Inject", "@Provides", "scope", "HiltAndroidApp"]
+---
+
+## Overview
+
+Dependency Injection (DI) is a design principle that decouples the creation of objects from their usage. In Android, Dagger 2 and Dagger-Hilt are the most widely used DI frameworks. This section covers the interview questions you are most likely to encounter on this topic.
+
+<AccordionGroup>
+
+  <Accordion title="Why use Dependency Injection? What problem does it solve?">
+    Without DI, classes create their own dependencies:
+
+    ```kotlin
+    class UserRepository {
+        // Tightly coupled — hard to test, hard to swap
+        private val api = RetrofitInstance.create(ApiService::class.java)
+        private val db = Room.databaseBuilder(...).build()
+    }
+    ```
+
+    This causes several problems:
+    - **Tight coupling** — `UserRepository` is permanently bound to specific implementations.
+    - **Hard to test** — you cannot easily inject a fake `ApiService` in unit tests.
+    - **No reuse** — every class that needs `ApiService` creates its own instance.
+    - **Difficult to swap** — changing implementations requires modifying every class that uses them.
+
+    With DI, dependencies are provided from outside:
+
+    ```kotlin
+    class UserRepository(
+        private val api: ApiService,        // injected
+        private val db: AppDatabase         // injected
+    )
+    ```
+
+    Benefits:
+    - **Testability** — inject mocks or fakes in tests.
+    - **Reusability** — a single instance can be shared across many classes.
+    - **Separation of concerns** — classes describe what they need, not how to create it.
+    - **Flexibility** — swap implementations (e.g., real vs. fake network) in one place.
+  </Accordion>
+
+  <Accordion title="What are the @Inject, @Module, @Provides, and @Component annotations in Dagger 2?">
+    Dagger 2 uses annotations to define the dependency graph at compile time, generating efficient Java code without reflection.
+
+    - **`@Inject`** — marks a constructor, field, or method as an injection point. When placed on a constructor, Dagger knows how to create instances of that class.
+    - **`@Module`** — marks a class as a provider of dependencies. Used when you cannot annotate a constructor (e.g., third-party classes, interfaces).
+    - **`@Provides`** — marks a method inside a `@Module` as the provider for a specific type. The return type of the method determines what dependency it satisfies.
+    - **`@Component`** — acts as the bridge between modules (providers) and injection targets (consumers). Dagger generates an implementation of this interface.
+
+    ```kotlin
+    // @Inject on constructor — Dagger can create this automatically
+    class UserRepository @Inject constructor(
+        private val api: ApiService
+    )
+
+    // @Module + @Provides — for types you don't own
+    @Module
+    object NetworkModule {
+        @Provides
+        fun provideApiService(okHttpClient: OkHttpClient): ApiService {
+            return Retrofit.Builder()
+                .baseUrl("https://api.example.com/")
+                .client(okHttpClient)
+                .addConverterFactory(GsonConverterFactory.create())
+                .build()
+                .create(ApiService::class.java)
+        }
+    }
+
+    // @Component — ties everything together
+    @Component(modules = [NetworkModule::class])
+    interface AppComponent {
+        fun inject(activity: MainActivity)
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="How does Dagger work internally?">
+    Dagger 2 is a **compile-time** dependency injection framework. Unlike Guice or Spring which use reflection at runtime, Dagger generates pure Java/Kotlin code during annotation processing.
+
+    The process:
+    1. You annotate classes with `@Inject`, `@Module`, `@Provides`, `@Component`.
+    2. The Dagger annotation processor runs at compile time and validates the entire dependency graph — missing dependencies, circular dependencies, and scope mismatches are caught at compile time, not runtime.
+    3. Dagger generates `Dagger<ComponentName>` implementation classes (e.g., `DaggerAppComponent`) that wire everything together using generated `Factory` and `Provider` classes.
+    4. At runtime, you call `DaggerAppComponent.builder().build()` to instantiate the component. No reflection is used.
+
+    This makes Dagger extremely performant at runtime but requires more boilerplate setup compared to runtime DI frameworks.
+  </Accordion>
+
+  <Accordion title="What is a Component in Dagger?">
+    A `@Component` is the main access point to the dependency graph. It is an interface annotated with `@Component` that:
+
+    - Lists the `@Module` classes that contribute dependencies.
+    - Exposes provision methods (returning dependencies) or injection methods (accepting objects to be field-injected).
+    - Can declare a scope that governs the lifetime of all dependencies created through it.
+
+    Dagger generates a concrete implementation of the component interface prefixed with `Dagger`.
+
+    ```kotlin
+    @Singleton
+    @Component(modules = [NetworkModule::class, DatabaseModule::class])
+    interface AppComponent {
+        // Injection method — Dagger injects fields into MainActivity
+        fun inject(activity: MainActivity)
+
+        // Provision method — returns a dependency directly
+        fun userRepository(): UserRepository
+    }
+
+    // Usage in Application class
+    val appComponent: AppComponent = DaggerAppComponent.builder()
+        .networkModule(NetworkModule())
+        .build()
+    ```
+
+    Components can depend on other components via `@Component(dependencies = [OtherComponent::class])`, enabling subcomponent hierarchies.
+  </Accordion>
+
+  <Accordion title="What is a Module in Dagger?">
+    A `@Module` is a class or object that tells Dagger how to create dependencies that cannot be annotated with `@Inject` — for example, third-party library classes, interfaces, or objects requiring complex initialization logic.
+
+    ```kotlin
+    @Module
+    object DatabaseModule {
+        @Provides
+        @Singleton
+        fun provideDatabase(@ApplicationContext context: Context): AppDatabase {
+            return Room.databaseBuilder(
+                context,
+                AppDatabase::class.java,
+                "app_database"
+            ).build()
+        }
+
+        @Provides
+        fun provideUserDao(database: AppDatabase): UserDao {
+            return database.userDao()
+        }
+    }
+    ```
+
+    Modules can also `include` other modules and `bind` abstract types to concrete implementations using `@Binds`.
+
+    ```kotlin
+    @Module
+    abstract class RepositoryModule {
+        // Bind the interface to the concrete implementation
+        @Binds
+        abstract fun bindUserRepository(impl: UserRepositoryImpl): UserRepository
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="How does custom scope work in Dagger?">
+    Scopes control the **lifetime** of a dependency within a given component. By default, Dagger creates a new instance every time a dependency is requested. Scoping tells Dagger to reuse the same instance for all requests within the component's lifetime.
+
+    `@Singleton` is built-in and scopes a dependency to the `AppComponent`. Custom scopes let you create dependencies that live as long as a specific component (e.g., a logged-in user session or an Activity).
+
+    ```kotlin
+    // Define a custom scope annotation
+    @Scope
+    @Retention(AnnotationRetention.RUNTIME)
+    annotation class ActivityScope
+
+    // Use it on the component
+    @ActivityScope
+    @Component(dependencies = [AppComponent::class])
+    interface ActivityComponent {
+        fun inject(activity: MainActivity)
+    }
+
+    // Use it on a provider — this instance lives as long as ActivityComponent
+    @Module
+    object ActivityModule {
+        @Provides
+        @ActivityScope
+        fun providePresenter(repository: UserRepository): MainPresenter {
+            return MainPresenter(repository)
+        }
+    }
+    ```
+
+    A scoped component must be created and destroyed in sync with the corresponding lifecycle (e.g., create in `onCreate`, release in `onDestroy`).
+  </Accordion>
+
+  <Accordion title="What is Dagger-Hilt and what are its advantages over Dagger 2?">
+    Dagger-Hilt is an opinionated DI library built on top of Dagger 2, designed specifically for Android. It eliminates most of the boilerplate that Dagger 2 requires by defining a **standard set of components** tied to Android lifecycle classes.
+
+    **Advantages over Dagger 2:**
+    - No need to write `@Component` interfaces — Hilt generates them.
+    - Standard component hierarchy (Application → Activity → Fragment → View) is pre-defined.
+    - Built-in ViewModel injection via `@HiltViewModel`.
+    - Simpler test setup with `@HiltAndroidTest`.
+    - Significantly less boilerplate for the common Android use cases.
+
+    <Tabs>
+      <Tab title="Dagger 2">
+        ```kotlin
+        // Must define component interface
+        @Singleton
+        @Component(modules = [NetworkModule::class])
+        interface AppComponent {
+            fun inject(activity: MainActivity)
+        }
+
+        // Must create component in Application
+        class MyApp : Application() {
+            lateinit var component: AppComponent
+            override fun onCreate() {
+                super.onCreate()
+                component = DaggerAppComponent.builder().build()
+            }
+        }
+
+        // Must retrieve component and inject in Activity
+        class MainActivity : AppCompatActivity() {
+            @Inject lateinit var repository: UserRepository
+
+            override fun onCreate(savedInstanceState: Bundle?) {
+                (application as MyApp).component.inject(this)
+                super.onCreate(savedInstanceState)
+            }
+        }
+        ```
+      </Tab>
+      <Tab title="Dagger-Hilt">
+        ```kotlin
+        // Application — just annotate it
+        @HiltAndroidApp
+        class MyApp : Application()
+
+        // Activity — just annotate it; injection is automatic
+        @AndroidEntryPoint
+        class MainActivity : AppCompatActivity() {
+            @Inject lateinit var repository: UserRepository
+
+            override fun onCreate(savedInstanceState: Bundle?) {
+                super.onCreate(savedInstanceState)
+                // repository is already injected
+            }
+        }
+
+        // ViewModel
+        @HiltViewModel
+        class UserViewModel @Inject constructor(
+            private val repository: UserRepository
+        ) : ViewModel()
+
+        // Module — provide dependencies the same way as Dagger 2
+        @Module
+        @InstallIn(SingletonComponent::class)
+        object NetworkModule {
+            @Provides
+            @Singleton
+            fun provideApiService(): ApiService { /* ... */ }
+        }
+        ```
+      </Tab>
+    </Tabs>
+  </Accordion>
+
+  <Accordion title="What do @HiltAndroidApp, @AndroidEntryPoint, @Inject, and @HiltViewModel do in Hilt?">
+    - **`@HiltAndroidApp`** — applied to the `Application` class. Triggers Hilt's code generation, creating the base application-level component and setting up the DI infrastructure. Required in every Hilt-based project.
+
+    - **`@AndroidEntryPoint`** — applied to Android components (`Activity`, `Fragment`, `Service`, `BroadcastReceiver`, `View`). Generates a Hilt component for that class and enables field injection.
+
+    - **`@Inject`** — marks a constructor as the injection point (tells Hilt how to create the class) or a field for injection into an `@AndroidEntryPoint` class.
+
+    - **`@HiltViewModel`** — applied to `ViewModel` classes. Hilt generates the necessary `ViewModelFactory` automatically so the ViewModel can be created with `by viewModels()` or `by activityViewModels()`.
+
+    ```kotlin
+    @HiltViewModel
+    class ProfileViewModel @Inject constructor(
+        private val userRepository: UserRepository,
+        private val savedStateHandle: SavedStateHandle
+    ) : ViewModel() {
+        val userId: String = savedStateHandle.get<String>("userId") ?: ""
+    }
+
+    @AndroidEntryPoint
+    class ProfileFragment : Fragment() {
+        private val viewModel: ProfileViewModel by viewModels()
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="When should you choose Dagger 2 vs Dagger-Hilt?">
+    **Choose Dagger-Hilt** for most Android projects, especially new ones. It covers the vast majority of Android DI use cases with far less boilerplate and is the approach recommended by Google.
+
+    **Choose Dagger 2 directly** when:
+    - You have an existing Dagger 2 codebase that migration would disrupt.
+    - You need custom component hierarchies that do not fit Hilt's predefined structure.
+    - You are building a library (Hilt is intended for application modules, not libraries).
+    - You need very fine-grained control over component lifetimes.
+
+    <Note>
+      In practice, Hilt is Dagger 2 under the hood. The annotations, modules, providers, and scoping mechanisms are identical. Hilt simply removes the need to define component interfaces and wire them to Android classes manually.
+    </Note>
+  </Accordion>
+
+  <Accordion title="Manual dependency injection vs DI frameworks">
+    **Manual DI** means creating and passing dependencies by hand — typically in a factory or service locator pattern.
+
+    ```kotlin
+    // Manual DI in Application
+    class MyApp : Application() {
+        val okHttpClient by lazy { OkHttpClient.Builder().build() }
+        val apiService by lazy { Retrofit.Builder().client(okHttpClient).build().create(ApiService::class.java) }
+        val userRepository by lazy { UserRepository(apiService) }
+    }
+
+    // Activity retrieves from Application
+    class MainActivity : AppCompatActivity() {
+        private val repository by lazy { (application as MyApp).userRepository }
+    }
+    ```
+
+    **Tradeoffs:**
+
+    | Aspect | Manual DI | DI Framework (Hilt/Dagger) |
+    |--------|-----------|---------------------------|
+    | Setup effort | Low initially | Higher initially |
+    | Scalability | Degrades quickly | Scales well |
+    | Compile-time safety | None | Yes (Dagger/Hilt) |
+    | Testability | Possible but manual | First-class support |
+    | Boilerplate | Manual wiring grows | Generated |
+
+    Manual DI is practical for small apps or prototypes. For production apps with many dependencies, a framework is preferable.
+  </Accordion>
+
+</AccordionGroup>

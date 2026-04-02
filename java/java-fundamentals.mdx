@@ -1,0 +1,851 @@
+---
+title: "Java Fundamentals"
+description: "Core Java concepts for Android interviews: SOLID principles, OOP, collections, generics, exceptions, and more."
+keywords: ["java", "SOLID", "OOP", "collections", "generics", "serialization", "android interview"]
+---
+
+<AccordionGroup>
+
+<Accordion title="What are the SOLID principles?">
+
+SOLID is a set of five design principles that help write maintainable, scalable, and testable object-oriented code.
+
+**S — Single Responsibility Principle (SRP)**
+
+A class should have only one reason to change. Each class should do one thing and do it well.
+
+```java
+// Bad: UserManager handles both user data and email sending
+class UserManager {
+    void saveUser(User user) { /* ... */ }
+    void sendWelcomeEmail(User user) { /* ... */ }
+}
+
+// Good: responsibilities are separated
+class UserRepository {
+    void saveUser(User user) { /* ... */ }
+}
+class EmailService {
+    void sendWelcomeEmail(User user) { /* ... */ }
+}
+```
+
+**O — Open/Closed Principle (OCP)**
+
+Classes should be open for extension but closed for modification. Add new behaviour by extending, not by editing existing code.
+
+```java
+// Open for extension via polymorphism
+abstract class Shape {
+    abstract double area();
+}
+class Circle extends Shape {
+    double radius;
+    @Override double area() { return Math.PI * radius * radius; }
+}
+class Rectangle extends Shape {
+    double width, height;
+    @Override double area() { return width * height; }
+}
+```
+
+**L — Liskov Substitution Principle (LSP)**
+
+Subtypes must be substitutable for their base types without altering the correctness of the program.
+
+```java
+// Any subclass of Bird used as a Bird should not break the caller
+class Bird { void fly() { System.out.println("Flying"); } }
+class Sparrow extends Bird { @Override void fly() { System.out.println("Sparrow flying"); } }
+```
+
+**I — Interface Segregation Principle (ISP)**
+
+Clients should not be forced to depend on interfaces they do not use. Prefer many small, focused interfaces over one large general interface.
+
+```java
+// Bad: forces all implementors to implement methods they may not need
+interface Worker {
+    void work();
+    void eat();
+    void sleep();
+}
+
+// Good: segregated interfaces
+interface Workable { void work(); }
+interface Eatable  { void eat(); }
+```
+
+**D — Dependency Inversion Principle (DIP)**
+
+High-level modules should not depend on low-level modules. Both should depend on abstractions.
+
+```java
+// High-level class depends on the abstraction, not a concrete class
+interface DataSource { List<User> getUsers(); }
+class NetworkDataSource implements DataSource { /* ... */ }
+class UserViewModel {
+    private final DataSource dataSource;
+    UserViewModel(DataSource dataSource) { this.dataSource = dataSource; }
+}
+```
+</Accordion>
+
+<Accordion title="What are the four OOP concepts?">
+
+**Encapsulation** — bundling data and the methods that operate on it inside a class, and restricting direct access to some components.
+
+```java
+class BankAccount {
+    private double balance; // hidden state
+    public double getBalance() { return balance; }
+    public void deposit(double amount) {
+        if (amount > 0) balance += amount;
+    }
+}
+```
+
+**Inheritance** — a child class acquires properties and behaviour from a parent class, enabling code reuse.
+
+```java
+class Animal { void breathe() { System.out.println("Breathing"); } }
+class Dog extends Animal { void bark() { System.out.println("Woof!"); } }
+```
+
+**Polymorphism** — the ability of an object to take many forms. A parent reference can point to a child object, and the correct method is called at runtime (dynamic dispatch).
+
+```java
+Animal animal = new Dog(); // runtime polymorphism
+animal.breathe(); // calls Dog's overridden breathe if overridden
+```
+
+**Abstraction** — hiding implementation details and exposing only the essential interface to the user.
+
+```java
+abstract class Vehicle {
+    abstract void startEngine(); // contract, no implementation
+    void refuel() { System.out.println("Refuelling"); }
+}
+```
+</Accordion>
+
+<Accordion title="What is the difference between abstract classes and interfaces?">
+
+| Feature | Abstract Class | Interface |
+|---|---|---|
+| Instantiation | Cannot be instantiated | Cannot be instantiated |
+| Methods | Can have concrete and abstract methods | All methods are implicitly abstract (Java 7); default/static allowed since Java 8 |
+| Variables | Can have instance variables | Only `public static final` constants |
+| Constructors | Can have constructors | Cannot have constructors |
+| Inheritance | Single inheritance (`extends`) | Multiple implementation (`implements`) |
+| Access modifiers | Any modifier on members | Members are `public` by default |
+
+**When to use an abstract class**: when you have shared state or a base implementation that subclasses extend (e.g., `BaseActivity`).
+
+**When to use an interface**: when you want to define a contract that unrelated classes can implement (e.g., `Serializable`, `Clickable`).
+
+```java
+abstract class BaseRepository {
+    protected Database db;
+    abstract void save(Object obj);
+    void connect() { db = new Database(); } // shared implementation
+}
+
+interface Cacheable {
+    void cache();
+    void invalidate();
+}
+```
+</Accordion>
+
+<Accordion title="What is the difference between method overloading and method overriding?">
+
+**Method overloading** (compile-time polymorphism) — two or more methods in the same class with the same name but different parameter lists.
+
+```java
+class MathUtils {
+    int add(int a, int b) { return a + b; }
+    double add(double a, double b) { return a + b; }
+    int add(int a, int b, int c) { return a + b + c; }
+}
+```
+
+**Method overriding** (runtime polymorphism) — a subclass provides a specific implementation for a method already defined in its parent class. The method signature must match exactly.
+
+```java
+class Animal {
+    void sound() { System.out.println("Some sound"); }
+}
+class Cat extends Animal {
+    @Override
+    void sound() { System.out.println("Meow"); }
+}
+```
+
+Key difference: overloading is resolved at **compile time** (based on the parameter type), overriding is resolved at **runtime** (based on the actual object type).
+</Accordion>
+
+<Accordion title="What are the access modifiers in Java?">
+
+There are four access modifiers, from most restrictive to least restrictive:
+
+1. **`private`** — accessible only within the declaring class. Used to enforce encapsulation.
+
+2. **`default`** (package-private, no keyword) — accessible within the same package. Used when classes in the same package need to collaborate.
+
+3. **`protected`** — accessible within the same package and by subclasses in any package.
+
+4. **`public`** — accessible from any class anywhere.
+
+```java
+public class Example {
+    private int privateField;       // only this class
+    int defaultField;               // same package
+    protected int protectedField;   // same package + subclasses
+    public int publicField;         // everywhere
+
+    private void privateMethod() {}
+    void defaultMethod() {}
+    protected void protectedMethod() {}
+    public void publicMethod() {}
+}
+```
+</Accordion>
+
+<Accordion title="Can an Interface implement another Interface?">
+
+Yes — but an interface **extends** another interface (it does not use `implements`). An interface can extend multiple interfaces.
+
+```java
+interface Flyable {
+    void fly();
+}
+
+interface Swimmable {
+    void swim();
+}
+
+// Interface extends multiple interfaces
+interface AquaticBird extends Flyable, Swimmable {
+    void dive(); // additional method
+}
+
+class Duck implements AquaticBird {
+    @Override public void fly()  { System.out.println("Duck flying"); }
+    @Override public void swim() { System.out.println("Duck swimming"); }
+    @Override public void dive() { System.out.println("Duck diving"); }
+}
+```
+
+A sub-interface may add new methods but cannot remove methods declared in its parent interfaces.
+</Accordion>
+
+<Accordion title="Why is String immutable in Java? What is the String Pool?">
+
+**Immutability**: Once a `String` object is created, its underlying `char[]` is declared `final` and cannot be changed. Any operation that appears to modify a string actually creates a new `String` object.
+
+Reasons for immutability:
+- **Security**: sensitive data (passwords, file paths) cannot be altered after creation.
+- **Thread safety**: immutable objects are inherently thread-safe.
+- **Hash code caching**: `hashCode()` can be computed once and cached, making strings efficient as `HashMap` keys.
+- **String Pool**: the JVM can safely share instances.
+
+**String Pool**: a special area in the heap (PermGen in Java 7 and below; heap in Java 8+) where string literals are interned. When you create `"hello"`, the JVM checks the pool first. If the same literal exists, the existing reference is returned rather than allocating a new object.
+
+```java
+String a = "hello";       // goes into String Pool
+String b = "hello";       // reuses the same pooled object
+String c = new String("hello"); // always creates a new heap object
+
+System.out.println(a == b);  // true  (same pool reference)
+System.out.println(a == c);  // false (c is a separate heap object)
+System.out.println(a.equals(c)); // true  (same content)
+```
+</Accordion>
+
+<Accordion title="What is the difference between String, StringBuffer, and StringBuilder?">
+
+| Feature | String | StringBuffer | StringBuilder |
+|---|---|---|---|
+| Mutability | Immutable | Mutable | Mutable |
+| Thread safety | Thread-safe (immutable) | Thread-safe (synchronized) | Not thread-safe |
+| Performance | Slowest for repeated concatenation | Slower than StringBuilder | Fastest for single-thread use |
+
+**Use `String`** when the value will not change.  
+**Use `StringBuffer`** when multiple threads modify the same sequence.  
+**Use `StringBuilder`** when building strings in a single thread (most common in Android).
+
+```java
+// Avoid String concatenation in loops (creates many objects)
+String result = "";
+for (int i = 0; i < 1000; i++) result += i; // 1000 new String objects
+
+// Prefer StringBuilder
+StringBuilder sb = new StringBuilder();
+for (int i = 0; i < 1000; i++) sb.append(i);
+String result2 = sb.toString(); // only one final String
+```
+</Accordion>
+
+<Accordion title="What are the 8 primitive types in Java?">
+
+Java has exactly eight primitive types:
+
+| Type | Size | Default | Range |
+|---|---|---|---|
+| `byte` | 8 bits | 0 | -128 to 127 |
+| `short` | 16 bits | 0 | -32,768 to 32,767 |
+| `int` | 32 bits | 0 | -2^31 to 2^31 - 1 |
+| `long` | 64 bits | 0L | -2^63 to 2^63 - 1 |
+| `float` | 32 bits | 0.0f | ~±3.4e38 |
+| `double` | 64 bits | 0.0d | ~±1.7e308 |
+| `char` | 16 bits | '\u0000' | 0 to 65,535 (Unicode) |
+| `boolean` | JVM-dependent | false | true / false |
+
+All other types in Java are reference types (objects).
+</Accordion>
+
+<Accordion title="What is the difference between Integer and int?">
+
+`int` is a **primitive** type. It is stored directly on the stack (or embedded in an object on the heap) and cannot be `null`.
+
+`Integer` is a **wrapper class** (reference type) that wraps an `int` value inside an object. It provides utility methods and can be `null`.
+
+```java
+int primitive = 42;          // stored by value
+Integer wrapper = 42;        // autoboxing: Integer.valueOf(42)
+Integer nullable = null;     // valid
+
+// Autoboxing (int → Integer) and unboxing (Integer → int) happen automatically
+Integer a = 5;   // autoboxed
+int b = a;       // unboxed
+
+// Be careful with null unboxing
+Integer x = null;
+int y = x; // throws NullPointerException at runtime
+```
+
+Wrapper classes are needed when you work with Java Collections (e.g., `List<Integer>`) because generics cannot use primitives.
+</Accordion>
+
+<Accordion title="Does Java pass arguments by reference or by value?">
+
+Java is **always pass by value**. However, what is passed differs for primitives and objects:
+
+- **Primitives**: the actual value is copied. Changes inside the method do not affect the original.
+- **Objects**: the value of the **reference** (memory address) is copied. Both the original variable and the parameter point to the same object, so mutations to the object's state are visible outside the method. But reassigning the parameter inside the method does not affect the original reference.
+
+```java
+void modifyPrimitive(int x) { x = 99; }  // original unchanged
+
+void modifyObject(StringBuilder sb) {
+    sb.append(" World"); // mutates the object — visible outside
+}
+
+void reassignObject(StringBuilder sb) {
+    sb = new StringBuilder("New"); // only local reference changes
+}
+
+StringBuilder original = new StringBuilder("Hello");
+modifyObject(original);   // original is now "Hello World"
+reassignObject(original); // original is still "Hello World"
+```
+</Accordion>
+
+<Accordion title="What is the difference between Arrays and ArrayList?">
+
+| Feature | Array | ArrayList |
+|---|---|---|
+| Size | Fixed at creation | Dynamic, grows automatically |
+| Type | Can hold primitives and objects | Can only hold objects (uses autoboxing) |
+| Performance | Faster random access, no overhead | Slightly slower due to boxing/resizing |
+| Methods | Only `length` field | Rich API: `add`, `remove`, `contains`, etc. |
+| Generics | Not generic | Generic: `ArrayList<String>` |
+
+```java
+// Array
+int[] arr = new int[5];
+arr[0] = 10;
+
+// ArrayList
+ArrayList<Integer> list = new ArrayList<>();
+list.add(10);
+list.remove(0);
+list.size(); // dynamic
+```
+
+Use an array when size is known and fixed and performance is critical. Use `ArrayList` when the size changes at runtime.
+</Accordion>
+
+<Accordion title="What is the difference between HashSet and TreeSet?">
+
+| Feature | HashSet | TreeSet |
+|---|---|---|
+| Ordering | No guaranteed order | Sorted (natural or custom `Comparator`) |
+| Performance | O(1) add/remove/contains | O(log n) add/remove/contains |
+| Null values | Allows one `null` | Does not allow `null` (throws NPE) |
+| Backing | `HashMap` | `TreeMap` (Red-Black tree) |
+
+```java
+HashSet<String> hashSet = new HashSet<>();
+hashSet.add("banana"); hashSet.add("apple"); hashSet.add("cherry");
+// Iteration order is unpredictable
+
+TreeSet<String> treeSet = new TreeSet<>();
+treeSet.add("banana"); treeSet.add("apple"); treeSet.add("cherry");
+// Iteration order: apple, banana, cherry (sorted)
+```
+
+Use `HashSet` for fast membership tests. Use `TreeSet` when you need elements in sorted order.
+</Accordion>
+
+<Accordion title="What is the difference between HashMap and HashSet?">
+
+`HashMap` maps **keys to values** (`K → V`). `HashSet` stores a **set of unique elements** (internally backed by a `HashMap` where every value is a dummy object).
+
+```java
+HashMap<String, Integer> map = new HashMap<>();
+map.put("Alice", 30);
+map.get("Alice"); // 30
+
+HashSet<String> set = new HashSet<>();
+set.add("Alice");
+set.contains("Alice"); // true
+```
+
+Use `HashMap` when you need key-value association. Use `HashSet` when you only need to track presence of elements without associated values.
+</Accordion>
+
+<Accordion title="What are Generics in Java?">
+
+Generics allow you to write classes, interfaces, and methods that work with **any type**, while providing compile-time type safety.
+
+```java
+// Without generics (unsafe cast required)
+List list = new ArrayList();
+list.add("hello");
+String s = (String) list.get(0); // runtime cast
+
+// With generics (type-safe)
+List<String> strings = new ArrayList<>();
+strings.add("hello");
+String s2 = strings.get(0); // no cast needed
+
+// Generic class
+class Pair<A, B> {
+    private final A first;
+    private final B second;
+    Pair(A first, B second) { this.first = first; this.second = second; }
+    A getFirst() { return first; }
+    B getSecond() { return second; }
+}
+
+// Generic method
+<T extends Comparable<T>> T max(T a, T b) {
+    return a.compareTo(b) >= 0 ? a : b;
+}
+```
+
+**Bounded type parameters**: `<T extends Number>` restricts `T` to `Number` and its subclasses.
+</Accordion>
+
+<Accordion title="What does the static keyword mean in Java?">
+
+`static` members belong to the **class** rather than to any instance.
+
+- **Static variable**: shared across all instances. Changing it in one instance affects all.
+- **Static method**: can be called without an instance. Cannot access non-static members directly.
+- **Static block**: executed once when the class is first loaded, before any instance is created.
+- **Static nested class**: a nested class that does not hold a reference to the outer class instance.
+
+```java
+class Counter {
+    static int count = 0; // shared
+
+    static { // static block
+        System.out.println("Class loaded. count = " + count);
+    }
+
+    Counter() { count++; }
+
+    static int getCount() { return count; } // static method
+}
+
+Counter.getCount(); // call without instance
+new Counter();
+new Counter();
+System.out.println(Counter.getCount()); // 2
+```
+</Accordion>
+
+<Accordion title="Can a static method be overridden in Java?">
+
+No, static methods **cannot be overridden** in the true polymorphic sense. They can be **hidden** (method hiding) in a subclass, but the method called is determined by the **compile-time type** of the reference, not the runtime type.
+
+```java
+class Parent {
+    static void greet() { System.out.println("Hello from Parent"); }
+}
+class Child extends Parent {
+    static void greet() { System.out.println("Hello from Child"); }
+}
+
+Parent obj = new Child();
+obj.greet(); // prints "Hello from Parent" — NOT Child's version
+Child.greet(); // prints "Hello from Child"
+```
+
+This is different from instance method overriding where `obj.greet()` would call `Child.greet()`.
+</Accordion>
+
+<Accordion title="What is the difference between final, finally, and finalize?">
+
+**`final`** — a modifier that prevents modification:
+- `final` variable: value cannot be reassigned.
+- `final` method: cannot be overridden in subclasses.
+- `final` class: cannot be subclassed (e.g., `String`).
+
+```java
+final int MAX = 100; // constant
+final class Immutable {} // cannot extend
+```
+
+**`finally`** — a block in exception handling that always executes, whether or not an exception was thrown. Used for cleanup (closing resources).
+
+```java
+try {
+    riskyOperation();
+} catch (Exception e) {
+    handleError(e);
+} finally {
+    closeResources(); // always runs
+}
+```
+
+**`finalize()`** — a method in `Object` called by the garbage collector before an object is collected. It is deprecated since Java 9 and should not be relied upon for resource cleanup.
+
+```java
+@Override
+protected void finalize() throws Throwable {
+    // clean up — unreliable, avoid in modern code
+    super.finalize();
+}
+```
+</Accordion>
+
+<Accordion title="What is the difference between throw and throws?">
+
+**`throw`** — used inside a method body to explicitly throw an exception instance.
+
+**`throws`** — used in the method signature to declare that the method may propagate a checked exception to its caller.
+
+```java
+// throws declares the possible checked exception
+void readFile(String path) throws IOException {
+    if (path == null) {
+        throw new IllegalArgumentException("Path cannot be null"); // throw
+    }
+    // may propagate IOException from file I/O
+}
+```
+
+`throw` requires an actual exception object; `throws` only lists the exception type. You can `throws` multiple exceptions separated by commas.
+</Accordion>
+
+<Accordion title="What are anonymous classes in Java?">
+
+An anonymous class is a class defined and instantiated in a single expression. It has no name and is typically used to provide a one-off implementation of an interface or abstract class.
+
+```java
+// Anonymous class implementing an interface
+Runnable r = new Runnable() {
+    @Override
+    public void run() {
+        System.out.println("Running in anonymous class");
+    }
+};
+
+new Thread(r).start();
+
+// Anonymous class extending an abstract class
+abstract class Greeter {
+    abstract void greet();
+}
+Greeter g = new Greeter() {
+    @Override void greet() { System.out.println("Hello!"); }
+};
+g.greet();
+```
+
+In modern Java and Kotlin, lambda expressions and SAM conversions are preferred over anonymous classes for single-abstract-method interfaces.
+</Accordion>
+
+<Accordion title="What is the difference between Shallow Copy and Deep Copy?">
+
+**Shallow copy**: creates a new object and copies the field values. For reference-type fields, only the reference (pointer) is copied — both the original and the copy point to the **same nested objects**.
+
+**Deep copy**: creates a new object and recursively copies all nested objects, so the original and the copy are completely independent.
+
+```java
+class Address {
+    String city;
+    Address(String city) { this.city = city; }
+}
+
+class Person implements Cloneable {
+    String name;
+    Address address;
+
+    // Shallow copy — address is shared
+    @Override
+    protected Object clone() throws CloneNotSupportedException {
+        return super.clone();
+    }
+
+    // Deep copy — address is also cloned
+    Person deepCopy() {
+        Person p = new Person();
+        p.name = this.name;
+        p.address = new Address(this.address.city); // new object
+        return p;
+    }
+}
+```
+
+<Warning>
+Modifying the nested `Address` object in a shallow copy will also change the original object's address.
+</Warning>
+</Accordion>
+
+<Accordion title="What is Serialization and Deserialization in Java?">
+
+**Serialization** converts an object into a byte stream so it can be persisted to disk or transmitted over a network.
+
+**Deserialization** reconstructs the object from the byte stream.
+
+A class must implement `java.io.Serializable` (a marker interface with no methods) to be serializable.
+
+```java
+import java.io.*;
+
+class User implements Serializable {
+    private static final long serialVersionUID = 1L;
+    String name;
+    int age;
+}
+
+// Serialize
+try (ObjectOutputStream oos = new ObjectOutputStream(new FileOutputStream("user.ser"))) {
+    oos.writeObject(new User());
+}
+
+// Deserialize
+try (ObjectInputStream ois = new ObjectInputStream(new FileInputStream("user.ser"))) {
+    User user = (User) ois.readObject();
+}
+```
+
+`serialVersionUID` is used for version control. If the class changes and the UID does not match, deserialization throws `InvalidClassException`.
+
+In Android, prefer **Parcelable** over Serializable for IPC (it is much faster). See the Other Topics page for comparison.
+</Accordion>
+
+<Accordion title="What is the transient modifier?">
+
+A field marked `transient` is **excluded from serialization**. When the object is serialized, `transient` fields are not written to the byte stream. When deserialized, `transient` fields are initialized to their default values (`null` for objects, `0` for numbers, `false` for booleans).
+
+```java
+class Session implements Serializable {
+    String username;
+    transient String password; // never serialized
+    transient Socket connection; // non-serializable, must be transient
+}
+```
+
+Use `transient` for:
+- Sensitive data (passwords, tokens) that should never be persisted.
+- Fields that are derived (can be recomputed from other fields).
+- Non-serializable dependencies (e.g., open file handles, network connections).
+</Accordion>
+
+<Accordion title="What is the role of hashCode() and equals()?">
+
+`equals()` defines **logical equality** — when two objects should be considered the same value.  
+`hashCode()` returns an **integer hash** of the object, used by hash-based collections (`HashMap`, `HashSet`, `Hashtable`).
+
+**Contract**:
+1. If `a.equals(b)` is `true`, then `a.hashCode() == b.hashCode()` must also be `true`.
+2. If `a.hashCode() == b.hashCode()`, `equals` may or may not be `true` (hash collision is allowed).
+3. Consistent: multiple calls return the same result if no fields change.
+
+```java
+class Point {
+    int x, y;
+
+    @Override
+    public boolean equals(Object obj) {
+        if (this == obj) return true;
+        if (!(obj instanceof Point)) return false;
+        Point other = (Point) obj;
+        return x == other.x && y == other.y;
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(x, y);
+    }
+}
+```
+
+<Warning>
+If you override `equals()` without overriding `hashCode()`, your objects will behave incorrectly in `HashMap` and `HashSet`.
+</Warning>
+</Accordion>
+
+<Accordion title="What is Reflection in Java?">
+
+Reflection is the ability of a program to **inspect and manipulate its own structure at runtime** — classes, fields, methods, and constructors — without knowing them at compile time.
+
+```java
+Class<?> clazz = Class.forName("com.example.MyClass");
+
+// Inspect methods
+Method[] methods = clazz.getDeclaredMethods();
+for (Method m : methods) {
+    System.out.println(m.getName());
+}
+
+// Access private field
+Field field = clazz.getDeclaredField("secret");
+field.setAccessible(true);
+Object value = field.get(instance);
+
+// Invoke method dynamically
+Method method = clazz.getMethod("greet", String.class);
+method.invoke(instance, "World");
+```
+
+Reflection is used by:
+- Dependency injection frameworks (Dagger, Hilt).
+- Serialization libraries (Gson).
+- Testing frameworks (JUnit, Mockito).
+
+<Warning>
+Reflection bypasses compile-time checks, is slower than direct calls, and can break encapsulation. Use it sparingly.
+</Warning>
+</Accordion>
+
+<Accordion title="What is Dependency Injection?">
+
+Dependency Injection (DI) is a design pattern where an object's dependencies are **provided from the outside** rather than created by the object itself. This decouples classes, making them easier to test and change.
+
+```java
+// Without DI — tightly coupled
+class OrderService {
+    private PaymentGateway gateway = new StripeGateway(); // hardcoded
+}
+
+// With DI — loosely coupled
+interface PaymentGateway { void charge(double amount); }
+class StripeGateway implements PaymentGateway { /* ... */ }
+
+class OrderService {
+    private final PaymentGateway gateway;
+    // dependency is injected via constructor
+    OrderService(PaymentGateway gateway) { this.gateway = gateway; }
+}
+
+// Caller decides which implementation to use
+OrderService service = new OrderService(new StripeGateway());
+```
+
+In Android, Hilt (built on Dagger) is the recommended DI framework. It generates the boilerplate at compile time, avoiding runtime reflection overhead.
+</Accordion>
+
+<Accordion title="What is the difference between fail-fast and fail-safe iterators?">
+
+**Fail-fast** iterators (e.g., `ArrayList`, `HashMap`) throw `ConcurrentModificationException` if the collection is structurally modified during iteration (outside of the iterator's own `remove()`). They work directly on the underlying collection.
+
+**Fail-safe** iterators (e.g., `CopyOnWriteArrayList`, `ConcurrentHashMap`) do not throw an exception because they iterate over a **snapshot** (copy) of the collection. Modifications during iteration do not affect the copy.
+
+```java
+// Fail-fast example
+List<String> list = new ArrayList<>(Arrays.asList("a", "b", "c"));
+for (String s : list) {
+    if (s.equals("b")) list.remove(s); // throws ConcurrentModificationException
+}
+
+// Safe way with iterator
+Iterator<String> it = list.iterator();
+while (it.hasNext()) {
+    if (it.next().equals("b")) it.remove(); // safe
+}
+
+// Fail-safe example
+List<String> cowList = new CopyOnWriteArrayList<>(Arrays.asList("a", "b", "c"));
+for (String s : cowList) {
+    cowList.remove(s); // no exception, iterates over original snapshot
+}
+```
+</Accordion>
+
+<Accordion title="How do try, catch, and finally work?">
+
+```
+try { ... } catch (ExceptionType e) { ... } finally { ... }
+```
+
+- **`try`** block contains code that may throw an exception.
+- **`catch`** block runs when a matching exception is thrown. Multiple `catch` blocks can handle different exception types. Catch the most specific types first.
+- **`finally`** block always runs after the `try` (and any `catch`), whether or not an exception occurred. It is used for resource cleanup.
+
+```java
+FileInputStream fis = null;
+try {
+    fis = new FileInputStream("data.txt");
+    int data = fis.read();
+} catch (FileNotFoundException e) {
+    System.err.println("File not found: " + e.getMessage());
+} catch (IOException e) {
+    System.err.println("IO error: " + e.getMessage());
+} finally {
+    if (fis != null) {
+        try { fis.close(); } catch (IOException ignored) {}
+    }
+}
+```
+
+Modern Java (7+) supports **try-with-resources** which automatically closes `Closeable` resources:
+
+```java
+try (FileInputStream fis = new FileInputStream("data.txt")) {
+    int data = fis.read();
+} catch (IOException e) {
+    e.printStackTrace();
+}
+```
+</Accordion>
+
+<Accordion title="What is the difference between Checked and Unchecked exceptions?">
+
+**Checked exceptions** extend `Exception` (but not `RuntimeException`). The compiler enforces that they are either caught or declared in the method signature with `throws`. Examples: `IOException`, `SQLException`.
+
+**Unchecked exceptions** extend `RuntimeException`. They do not need to be declared or caught. Examples: `NullPointerException`, `ArrayIndexOutOfBoundsException`, `IllegalArgumentException`.
+
+```java
+// Checked — compiler forces you to handle it
+void readFile() throws IOException {
+    new FileReader("file.txt"); // must declare or catch IOException
+}
+
+// Unchecked — no forced handling
+void divide(int a, int b) {
+    if (b == 0) throw new ArithmeticException("Division by zero"); // unchecked
+    int result = a / b;
+}
+```
+
+**Rule of thumb**: use checked exceptions for recoverable conditions (e.g., file not found — the user can be prompted to choose another file). Use unchecked exceptions for programming errors that should not occur in correct code (e.g., `NullPointerException`).
+</Accordion>
+
+</AccordionGroup>

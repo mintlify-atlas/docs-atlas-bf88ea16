@@ -1,0 +1,436 @@
+---
+title: "Jetpack Components"
+description: "Interview questions on ViewModel, LiveData, WorkManager, Navigation, DataStore, Room, and Android Architecture Components."
+keywords: ["android jetpack", "ViewModel", "LiveData", "StateFlow", "WorkManager", "DataStore", "Room", "architecture components", "ViewModelStore", "SharedViewModel", "postValue", "setValue"]
+---
+
+Android Jetpack is a suite of libraries that help you follow best practices, write less boilerplate, and build apps that work consistently across Android versions. This page covers the most-asked Jetpack interview questions.
+
+## Jetpack overview
+
+<AccordionGroup>
+  <Accordion title="What is Android Jetpack?">
+    Android Jetpack is a collection of software components, tools, and architectural guidance built by the Android team to help developers write high-quality apps more easily. Jetpack libraries are unbundled from the platform and available via Maven, so they can be updated independently of Android releases.
+
+    **Jetpack is organized into four categories:**
+
+    | Category | Examples |
+    |---|---|
+    | **Foundation** | AppCompat, Android KTX, Multidex, Test |
+    | **Architecture** | ViewModel, LiveData, Room, DataStore, WorkManager, Navigation, Paging |
+    | **UI** | Fragment, RecyclerView, ViewPager2, ConstraintLayout, Compose |
+    | **Behavior** | Notifications, Permissions, Sharing, Slices |
+
+    **Key benefits:**
+    - Follows best practices and architectural patterns (MVVM, clean architecture)
+    - Handles backward compatibility across Android versions
+    - Reduces boilerplate — less code, fewer bugs
+    - Works well with Kotlin features (coroutines, extensions)
+  </Accordion>
+</AccordionGroup>
+
+## ViewModel
+
+<AccordionGroup>
+  <Accordion title="What is ViewModel and why is it useful?">
+    `ViewModel` is a Jetpack class designed to store and manage UI-related data in a lifecycle-conscious way. Its primary purpose is to **survive configuration changes** (such as screen rotation) without the data being lost or needing to be re-fetched.
+
+    ```kotlin
+    class UserViewModel : ViewModel() {
+        private val _users = MutableStateFlow<List<User>>(emptyList())
+        val users: StateFlow<List<User>> = _users.asStateFlow()
+
+        init {
+            loadUsers()
+        }
+
+        private fun loadUsers() {
+            viewModelScope.launch {
+                _users.value = repository.getUsers()
+            }
+        }
+    }
+
+    // In Fragment
+    class UserFragment : Fragment() {
+        private val viewModel: UserViewModel by viewModels()
+
+        override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+            super.onViewCreated(view, savedInstanceState)
+            viewLifecycleOwner.lifecycleScope.launch {
+                viewModel.users.collect { users -> updateList(users) }
+            }
+        }
+    }
+    ```
+
+    **Why it's useful:**
+    - Data survives screen rotation without re-fetching from network or database
+    - Separates UI logic from business logic (supports MVVM architecture)
+    - Has a built-in `viewModelScope` coroutine scope that is cancelled automatically when the ViewModel is cleared
+    - Shared between Fragments via `activityViewModels()` or Navigation graph scope
+  </Accordion>
+
+  <Accordion title="How does ViewModel work internally?">
+    `ViewModel` instances are stored in a **`ViewModelStore`**, which is an object that survives configuration changes. The `Activity` (or `Fragment`) implements `ViewModelStoreOwner`, which provides the `ViewModelStore`.
+
+    **Internal flow on screen rotation:**
+
+    1. User rotates screen → Activity is destroyed
+    2. Before destruction, the `NonConfigurationInstance` is saved — this includes the `ViewModelStore`
+    3. A new Activity instance is created
+    4. The new Activity retrieves the `NonConfigurationInstance` from the system
+    5. The new Activity gets the same `ViewModelStore` — same `ViewModel` instances
+
+    ```
+    Activity.onRetainNonConfigurationInstance()
+        → saves ViewModelStore
+    
+    New Activity.getLastNonConfigurationInstance()
+        → restores ViewModelStore
+    
+    ViewModelProvider(activity)[MyViewModel::class.java]
+        → returns existing ViewModel from the store
+    ```
+
+    **`ViewModelProvider`** creates new `ViewModel` instances via a `Factory` and stores them in the `ViewModelStore` keyed by class name. If the store already has an instance for that key, it returns the existing one.
+
+    **`ViewModel.onCleared()`** is called when the `ViewModelStore` is cleared — this happens when the Activity finishes (not on rotation). Cancel long-running work here.
+  </Accordion>
+
+  <Accordion title="How do you share a ViewModel between Fragments?">
+    Use `activityViewModels()` to scope the `ViewModel` to the host Activity. Both Fragments will receive the same `ViewModel` instance.
+
+    ```kotlin
+    // Shared ViewModel
+    class CartViewModel : ViewModel() {
+        private val _cartItems = MutableStateFlow<List<CartItem>>(emptyList())
+        val cartItems: StateFlow<List<CartItem>> = _cartItems.asStateFlow()
+
+        fun addItem(item: CartItem) {
+            _cartItems.update { it + item }
+        }
+    }
+
+    // Fragment A — product list
+    class ProductListFragment : Fragment() {
+        private val cartViewModel: CartViewModel by activityViewModels()
+
+        fun onAddToCart(item: CartItem) {
+            cartViewModel.addItem(item)
+        }
+    }
+
+    // Fragment B — cart summary
+    class CartSummaryFragment : Fragment() {
+        private val cartViewModel: CartViewModel by activityViewModels()
+
+        override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+            super.onViewCreated(view, savedInstanceState)
+            viewLifecycleOwner.lifecycleScope.launch {
+                cartViewModel.cartItems.collect { items ->
+                    updateCartCount(items.size)
+                }
+            }
+        }
+    }
+    ```
+
+    When using the **Jetpack Navigation Component**, you can also scope the `ViewModel` to a Navigation graph using `navGraphViewModels()`, which limits sharing to only the Fragments within that graph.
+  </Accordion>
+</AccordionGroup>
+
+## LiveData
+
+<AccordionGroup>
+  <Accordion title="What is LiveData and what are its advantages?">
+    `LiveData` is a lifecycle-aware observable data holder. Observers are only active when their associated `LifecycleOwner` (Activity or Fragment) is in an active state (`STARTED` or `RESUMED`). When the lifecycle owner is destroyed, the observer is automatically removed.
+
+    ```kotlin
+    class NewsViewModel : ViewModel() {
+        private val _articles = MutableLiveData<List<Article>>()
+        val articles: LiveData<List<Article>> = _articles
+
+        fun loadArticles() {
+            viewModelScope.launch {
+                _articles.value = repository.fetchArticles()
+            }
+        }
+    }
+
+    // In Fragment
+    viewModel.articles.observe(viewLifecycleOwner) { articles ->
+        adapter.submitList(articles)
+    }
+    ```
+
+    **Advantages:**
+    - **No memory leaks** — observers are tied to the lifecycle and auto-removed on destroy
+    - **No crashes from stopped activities** — updates are only delivered when the lifecycle is active
+    - **Always up to date** — if an observer becomes active after the data has been updated, it receives the latest value immediately
+    - **Configuration change safe** — the latest value is retained and re-delivered when the Activity/Fragment recreates
+  </Accordion>
+
+  <Accordion title="What is the difference between setValue() and postValue() in LiveData?">
+    Both set the value of a `MutableLiveData` and notify observers, but they differ in which thread they must be called from.
+
+    **`setValue(value)`** — must be called on the **main thread**. If called from a background thread, it throws an exception.
+
+    **`postValue(value)`** — can be called from **any thread** (including background threads). Internally, it posts a task to the main thread to set the value. If `postValue()` is called multiple times rapidly before the main thread processes the update, only the last value is delivered.
+
+    ```kotlin
+    class DataViewModel : ViewModel() {
+        private val _data = MutableLiveData<String>()
+        val data: LiveData<String> = _data
+
+        fun loadFromMainThread() {
+            _data.setValue("main thread value")  // ✓ on main thread
+        }
+
+        fun loadFromBackground() {
+            viewModelScope.launch(Dispatchers.IO) {
+                val result = fetchData()
+                _data.postValue(result)  // ✓ safe from any thread
+                // _data.setValue(result)  // ✗ would crash — not on main thread
+            }
+        }
+    }
+    ```
+
+    <Tip>
+      When using coroutines, prefer `withContext(Dispatchers.Main) { _data.value = result }` or use `StateFlow` instead of `postValue()`. `StateFlow` has no thread restriction on `.value` assignment.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="What is the difference between LiveData and ObservableField?">
+    **`LiveData`** is lifecycle-aware — observers are automatically removed when the `LifecycleOwner` is destroyed. It prevents memory leaks and unnecessary updates to inactive UI.
+
+    **`ObservableField`** (from Android Data Binding) is a simple wrapper around a value that notifies data-binding expressions when its value changes. It has no lifecycle awareness — it always notifies observers regardless of the UI state. This can lead to memory leaks if observers are not manually removed.
+
+    | Aspect | LiveData | ObservableField |
+    |---|---|---|
+    | Lifecycle awareness | Yes | No |
+    | Memory leak prevention | Automatic | Manual |
+    | Thread safety | Main thread required for `setValue` | Not thread-safe |
+    | Used with | Architecture Components | Data Binding only |
+    | Transformation support | `Transformations.map/switchMap` | None built-in |
+
+    In modern Android development, `StateFlow` or `LiveData` is preferred over `ObservableField`.
+  </Accordion>
+
+  <Accordion title="When should you use StateFlow vs LiveData?">
+    Both expose observable state, but they have different characteristics suited to different use cases.
+
+    | Aspect | LiveData | StateFlow |
+    |---|---|---|
+    | Lifecycle awareness | Built-in | Requires `repeatOnLifecycle` |
+    | Initial value | Not required | Required |
+    | Thread | Main thread for updates | Any thread |
+    | Kotlin-native | No (Java-based) | Yes |
+    | Operators | Limited (`Transformations`) | Full Flow operators |
+    | Replay | Always replays last value | Always replays last value |
+
+    ```kotlin
+    // StateFlow in ViewModel
+    class SearchViewModel : ViewModel() {
+        private val _query = MutableStateFlow("")
+        val query: StateFlow<String> = _query.asStateFlow()
+
+        private val _results = MutableStateFlow<List<Result>>(emptyList())
+        val results: StateFlow<List<Result>> = _results.asStateFlow()
+
+        init {
+            viewModelScope.launch {
+                _query
+                    .debounce(300)
+                    .filter { it.length >= 2 }
+                    .distinctUntilChanged()
+                    .flatMapLatest { query -> repository.search(query) }
+                    .collect { _results.value = it }
+            }
+        }
+    }
+
+    // Collecting in Fragment — use repeatOnLifecycle to stop when inactive
+    viewLifecycleOwner.lifecycleScope.launch {
+        viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            viewModel.results.collect { results -> updateUI(results) }
+        }
+    }
+    ```
+
+    **Guidance:**
+    - Use `StateFlow` for new code — it is Kotlin-idiomatic, supports coroutine operators, and works seamlessly with Kotlin Flow
+    - Use `LiveData` if you are working in an existing codebase that already uses it heavily, or when working with Java components
+  </Accordion>
+</AccordionGroup>
+
+## WorkManager
+
+<AccordionGroup>
+  <Accordion title="What is WorkManager and what are its use cases?">
+    See the [Services and Background Work](/android/services-and-background) page for a full WorkManager deep-dive including constraints, `CoroutineWorker`, chaining work, and guaranteed execution.
+
+    **Quick summary:** `WorkManager` is the recommended Jetpack API for deferrable, persistent background work. Key use cases include data sync, log upload, image processing, and periodic cache cleanup.
+
+    ```kotlin
+    // Chaining work
+    val uploadWorkRequest = OneTimeWorkRequestBuilder<UploadWorker>().build()
+    val compressWorkRequest = OneTimeWorkRequestBuilder<CompressWorker>().build()
+    val cleanupWorkRequest = OneTimeWorkRequestBuilder<CleanupWorker>().build()
+
+    WorkManager.getInstance(context)
+        .beginWith(compressWorkRequest)
+        .then(uploadWorkRequest)
+        .then(cleanupWorkRequest)
+        .enqueue()
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## DataStore and Room
+
+<AccordionGroup>
+  <Accordion title="What is Jetpack DataStore Preferences? How does it compare to SharedPreferences?">
+    **DataStore Preferences** is the modern replacement for `SharedPreferences`. It stores key-value pairs asynchronously using Kotlin coroutines and Flow, with full support for structured concurrency and error handling.
+
+    ```kotlin
+    // Define keys
+    private val Context.dataStore: DataStore<Preferences> by preferencesDataStore("settings")
+
+    object PreferencesKeys {
+        val THEME = stringPreferencesKey("theme")
+        val NOTIFICATIONS_ENABLED = booleanPreferencesKey("notifications_enabled")
+    }
+
+    // Read (returns a Flow — reactive)
+    val theme: Flow<String> = context.dataStore.data
+        .map { preferences ->
+            preferences[PreferencesKeys.THEME] ?: "light"
+        }
+
+    // Write
+    suspend fun saveTheme(theme: String) {
+        context.dataStore.edit { preferences ->
+            preferences[PreferencesKeys.THEME] = theme
+        }
+    }
+    ```
+
+    **DataStore vs SharedPreferences:**
+
+    | Aspect | SharedPreferences | DataStore Preferences |
+    |---|---|---|
+    | Thread safety | Not thread-safe | Thread-safe |
+    | Async API | `apply()` only (no result) | Fully coroutine-based |
+    | Error handling | Silent failures | Exceptions propagate via Flow |
+    | Data consistency | Can be inconsistent on crash | Transactional writes |
+    | `commit()` on main thread | Possible (blocks) | Not allowed |
+
+    <Warning>
+      `SharedPreferences.commit()` blocks the calling thread and should never be called on the main thread. `apply()` is asynchronous but provides no feedback. DataStore eliminates these footguns.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="What is Room and what are its main components?">
+    **Room** is an abstraction layer over SQLite that provides compile-time verification of SQL queries, object mapping (ORM), and seamless integration with coroutines and Flow.
+
+    **Main components:**
+
+    **`@Entity`** — represents a table in the database:
+    ```kotlin
+    @Entity(tableName = "users")
+    data class UserEntity(
+        @PrimaryKey val id: String,
+        @ColumnInfo(name = "full_name") val fullName: String,
+        val email: String,
+        val createdAt: Long = System.currentTimeMillis()
+    )
+    ```
+
+    **`@Dao`** (Data Access Object) — defines the database operations:
+    ```kotlin
+    @Dao
+    interface UserDao {
+        @Query("SELECT * FROM users ORDER BY full_name ASC")
+        fun getAllUsers(): Flow<List<UserEntity>>
+
+        @Query("SELECT * FROM users WHERE id = :userId")
+        suspend fun getUserById(userId: String): UserEntity?
+
+        @Insert(onConflict = OnConflictStrategy.REPLACE)
+        suspend fun insertUser(user: UserEntity)
+
+        @Delete
+        suspend fun deleteUser(user: UserEntity)
+
+        @Update
+        suspend fun updateUser(user: UserEntity)
+    }
+    ```
+
+    **`@Database`** — the database holder:
+    ```kotlin
+    @Database(entities = [UserEntity::class], version = 1, exportSchema = false)
+    abstract class AppDatabase : RoomDatabase() {
+        abstract fun userDao(): UserDao
+
+        companion object {
+            @Volatile private var INSTANCE: AppDatabase? = null
+
+            fun getInstance(context: Context): AppDatabase {
+                return INSTANCE ?: synchronized(this) {
+                    Room.databaseBuilder(
+                        context.applicationContext,
+                        AppDatabase::class.java,
+                        "app_database"
+                    ).build().also { INSTANCE = it }
+                }
+            }
+        }
+    }
+    ```
+
+    **Key advantages over raw SQLite:**
+    - SQL queries are verified at compile time — typos cause build failures, not runtime crashes
+    - Returns `Flow<T>` — database changes automatically update the UI
+    - Handles boilerplate (cursor management, query building)
+    - `@TypeConverter` support for custom types
+  </Accordion>
+</AccordionGroup>
+
+## Architecture Components
+
+<AccordionGroup>
+  <Accordion title="What are Android Architecture Components?">
+    Android Architecture Components are a set of Jetpack libraries that help you design robust, testable, and maintainable apps by providing opinionated guidance on app architecture.
+
+    **Core Architecture Components:**
+
+    | Component | Purpose |
+    |---|---|
+    | **ViewModel** | Manage UI state across configuration changes |
+    | **LiveData** | Lifecycle-aware observable data |
+    | **Room** | SQLite abstraction with compile-time query verification |
+    | **DataStore** | Async, consistent key-value and typed data storage |
+    | **WorkManager** | Guaranteed background task execution |
+    | **Navigation** | In-app navigation with back stack management |
+    | **Paging** | Load large datasets incrementally |
+    | **Lifecycle** | React to lifecycle events (`LifecycleOwner`, `LifecycleObserver`) |
+
+    These components work together in the recommended **MVVM with Repository** pattern:
+
+    ```
+    UI (Activity/Fragment)
+        ↕ observes
+    ViewModel
+        ↕ calls
+    Repository
+        ↕              ↕
+    Remote source   Local source
+    (Retrofit)      (Room)
+    ```
+
+    The `Lifecycle` library is the foundation: `LifecycleOwner` (Activity, Fragment) exposes lifecycle state, and `LifecycleObserver` can react to state changes — enabling `LiveData`, `ViewModel`, and other components to be lifecycle-aware automatically.
+  </Accordion>
+</AccordionGroup>

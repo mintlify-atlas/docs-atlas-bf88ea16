@@ -1,0 +1,637 @@
+---
+title: "Design Patterns"
+description: "Design patterns used in Android development and popular libraries like Retrofit and Glide, with Kotlin code examples for every pattern."
+keywords: ["design patterns", "android", "builder", "singleton", "observer", "factory", "repository", "facade", "dependency injection", "strategy", "adapter", "retrofit", "glide"]
+---
+
+Design patterns are reusable solutions to recurring problems. Android interviews regularly test whether you can identify patterns in library source code and apply them deliberately in your own code.
+
+<Note>
+For an in-depth look at design patterns found in Android libraries, see the [Design Patterns in Android Libraries](https://outcomeschool.substack.com/p/design-patterns-in-android-libraries) article by Amit Shekhar.
+</Note>
+
+<AccordionGroup>
+
+<Accordion title="Builder pattern — constructing complex objects step by step">
+
+The Builder pattern separates the construction of a complex object from its representation. It is useful when a constructor would require many optional parameters.
+
+**In Android:** `AlertDialog.Builder`, `Notification.Builder`, `OkHttpClient.Builder`, and `Retrofit.Builder` all use this pattern.
+
+```kotlin
+// Custom Builder pattern in Kotlin
+data class NetworkConfig(
+    val baseUrl: String,
+    val timeoutSeconds: Int,
+    val retryCount: Int,
+    val enableLogging: Boolean,
+    val headers: Map<String, String>
+)
+
+class NetworkConfig private constructor(builder: Builder) {
+    val baseUrl: String = builder.baseUrl
+    val timeoutSeconds: Int = builder.timeoutSeconds
+    val retryCount: Int = builder.retryCount
+    val enableLogging: Boolean = builder.enableLogging
+    val headers: Map<String, String> = builder.headers.toMap()
+
+    class Builder(val baseUrl: String) {
+        var timeoutSeconds: Int = 30
+        var retryCount: Int = 3
+        var enableLogging: Boolean = false
+        val headers: MutableMap<String, String> = mutableMapOf()
+
+        fun timeout(seconds: Int) = apply { timeoutSeconds = seconds }
+        fun retry(count: Int) = apply { retryCount = count }
+        fun logging(enabled: Boolean) = apply { enableLogging = enabled }
+        fun header(key: String, value: String) = apply { headers[key] = value }
+        fun build() = NetworkConfig(this)
+    }
+}
+
+// Usage
+val config = NetworkConfig.Builder("https://api.example.com")
+    .timeout(60)
+    .retry(2)
+    .logging(true)
+    .header("Accept", "application/json")
+    .build()
+```
+
+**Android system example:**
+
+```kotlin
+val dialog = AlertDialog.Builder(context)
+    .setTitle("Confirm")
+    .setMessage("Are you sure?")
+    .setPositiveButton("Yes") { _, _ -> confirm() }
+    .setNegativeButton("Cancel", null)
+    .create()
+dialog.show()
+```
+
+</Accordion>
+
+<Accordion title="Singleton pattern — thread-safe implementations in Kotlin">
+
+The Singleton pattern ensures a class has only one instance and provides a global access point to it.
+
+**Thread-safe approaches in Kotlin:**
+
+```kotlin
+// 1. Kotlin object declaration — compiled to a thread-safe singleton
+object AppDatabase {
+    fun query(sql: String): List<Row> = TODO()
+}
+
+// 2. Companion object with lazy initialization (double-checked locking)
+class DatabaseManager private constructor(context: Context) {
+
+    companion object {
+        @Volatile
+        private var instance: DatabaseManager? = null
+
+        fun getInstance(context: Context): DatabaseManager =
+            instance ?: synchronized(this) {
+                instance ?: DatabaseManager(context.applicationContext).also {
+                    instance = it
+                }
+            }
+    }
+}
+
+// 3. Kotlin lazy delegate — thread-safe by default (LazyThreadSafetyMode.SYNCHRONIZED)
+class ApiClient private constructor() {
+    companion object {
+        val instance: ApiClient by lazy { ApiClient() }
+    }
+}
+```
+
+**Why `@Volatile`?** Without it, a thread may read a stale cached value of `instance` from its local CPU cache rather than from main memory. `@Volatile` ensures all reads and writes go directly to main memory.
+
+**In Android:** `Room.databaseBuilder` results are typically stored as a singleton in a Hilt module. Retrofit and OkHttp instances should also be singletons to reuse the connection pool.
+
+<Warning>
+Singletons holding a `Context` reference can cause memory leaks. Always store `applicationContext`, never an `Activity` or `Fragment` context.
+</Warning>
+
+</Accordion>
+
+<Accordion title="Factory pattern — centralizing object creation">
+
+The Factory pattern defines an interface for creating objects but lets subclasses or configuration decide which class to instantiate. It removes direct `new`/constructor calls from the call site.
+
+**Factory Method:**
+
+```kotlin
+// Abstract product
+interface PaymentProcessor {
+    fun process(amount: Double): Boolean
+}
+
+// Concrete products
+class CreditCardProcessor : PaymentProcessor {
+    override fun process(amount: Double): Boolean {
+        println("Processing $$amount via credit card")
+        return true
+    }
+}
+
+class PayPalProcessor : PaymentProcessor {
+    override fun process(amount: Double): Boolean {
+        println("Processing $$amount via PayPal")
+        return true
+    }
+}
+
+// Factory
+object PaymentProcessorFactory {
+    fun create(method: PaymentMethod): PaymentProcessor = when (method) {
+        PaymentMethod.CREDIT_CARD -> CreditCardProcessor()
+        PaymentMethod.PAYPAL       -> PayPalProcessor()
+    }
+}
+
+enum class PaymentMethod { CREDIT_CARD, PAYPAL }
+
+// Usage — call site does not know the concrete type
+val processor = PaymentProcessorFactory.create(PaymentMethod.CREDIT_CARD)
+processor.process(49.99)
+```
+
+**In Android:** `ViewModelProvider.Factory` is the canonical Android example. You provide a factory to create a ViewModel with constructor parameters that the default factory cannot supply.
+
+```kotlin
+class UserViewModelFactory(
+    private val repository: UserRepository
+) : ViewModelProvider.Factory {
+    override fun <T : ViewModel> create(modelClass: Class<T>): T {
+        @Suppress("UNCHECKED_CAST")
+        return UserViewModel(repository) as T
+    }
+}
+```
+
+</Accordion>
+
+<Accordion title="Observer pattern — reactive updates in Android">
+
+The Observer pattern defines a one-to-many dependency: when an observable object changes state, all registered observers are notified automatically.
+
+**In Android:** LiveData, StateFlow, Flow, RxJava Observables, BroadcastReceiver, and `RecyclerView.AdapterDataObserver` all implement this pattern.
+
+```kotlin
+// Manual Observer pattern
+interface Observer<T> {
+    fun onChanged(value: T)
+}
+
+class Subject<T> {
+    private val observers = mutableListOf<Observer<T>>()
+    private var value: T? = null
+
+    fun addObserver(observer: Observer<T>) { observers.add(observer) }
+    fun removeObserver(observer: Observer<T>) { observers.remove(observer) }
+
+    fun setValue(newValue: T) {
+        value = newValue
+        observers.forEach { it.onChanged(newValue) }
+    }
+}
+
+// Android examples
+// 1. LiveData observer
+viewModel.userLiveData.observe(viewLifecycleOwner) { user ->
+    tvName.text = user.name
+}
+
+// 2. StateFlow collector (modern approach)
+viewLifecycleOwner.lifecycleScope.launch {
+    viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+        viewModel.userState.collect { user ->
+            tvName.text = user.name
+        }
+    }
+}
+
+// 3. BroadcastReceiver — observes system-wide events
+val receiver = object : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        if (intent.action == ConnectivityManager.CONNECTIVITY_ACTION) {
+            checkNetworkState()
+        }
+    }
+}
+registerReceiver(receiver, IntentFilter(ConnectivityManager.CONNECTIVITY_ACTION))
+```
+
+**Key examples in Android:**
+
+- `LiveData.observe()` — lifecycle-aware observer
+- `Flow.collect {}` — coroutine-based observer
+- `BroadcastReceiver` — system event observer
+- `ContentObserver` — observes content provider changes
+- `SensorEventListener` — observes hardware sensor events
+
+</Accordion>
+
+<Accordion title="Repository pattern — abstracting data sources">
+
+The Repository pattern provides a single source of truth for data. It decouples the rest of the application from the details of how data is fetched or stored.
+
+```kotlin
+// Repository interface (domain layer)
+interface NewsRepository {
+    suspend fun getTopHeadlines(category: String): List<Article>
+    fun getBookmarkedArticles(): Flow<List<Article>>
+    suspend fun bookmark(article: Article)
+}
+
+// Repository implementation (data layer)
+class NewsRepositoryImpl(
+    private val remoteSource: NewsRemoteDataSource,
+    private val localSource: NewsLocalDataSource,
+    private val dispatcher: CoroutineDispatcher = Dispatchers.IO
+) : NewsRepository {
+
+    override suspend fun getTopHeadlines(category: String): List<Article> =
+        withContext(dispatcher) {
+            try {
+                val articles = remoteSource.fetchHeadlines(category)
+                localSource.cacheArticles(articles)
+                articles
+            } catch (e: IOException) {
+                localSource.getCachedArticles(category)
+            }
+        }
+
+    override fun getBookmarkedArticles(): Flow<List<Article>> =
+        localSource.observeBookmarks()
+
+    override suspend fun bookmark(article: Article) =
+        withContext(dispatcher) { localSource.save(article.copy(isBookmarked = true)) }
+}
+```
+
+The repository is the bridge between the domain layer (which calls it via interface) and the data layer (which it delegates to). See the [Android Architecture](/architecture/android-architecture) page for how it fits into Clean Architecture.
+
+</Accordion>
+
+<Accordion title="Adapter pattern — bridging incompatible interfaces">
+
+The Adapter pattern converts the interface of a class into another interface expected by the client. It enables classes with incompatible interfaces to work together.
+
+**RecyclerView.Adapter** is the most prominent Android example. It adapts a data list (which the `RecyclerView` knows nothing about) into `ViewHolder` objects the `RecyclerView` can render.
+
+```kotlin
+// Data model
+data class Product(val id: String, val name: String, val priceUsd: Double)
+
+// Adapter — bridges List<Product> and RecyclerView
+class ProductAdapter(
+    private var items: List<Product>,
+    private val onItemClick: (Product) -> Unit
+) : RecyclerView.Adapter<ProductAdapter.ViewHolder>() {
+
+    class ViewHolder(private val binding: ItemProductBinding) :
+        RecyclerView.ViewHolder(binding.root) {
+
+        fun bind(product: Product, onClick: (Product) -> Unit) {
+            binding.tvName.text = product.name
+            binding.tvPrice.text = "$%.2f".format(product.priceUsd)
+            binding.root.setOnClickListener { onClick(product) }
+        }
+    }
+
+    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {
+        val binding = ItemProductBinding.inflate(
+            LayoutInflater.from(parent.context), parent, false
+        )
+        return ViewHolder(binding)
+    }
+
+    override fun onBindViewHolder(holder: ViewHolder, position: Int) {
+        holder.bind(items[position], onItemClick)
+    }
+
+    override fun getItemCount(): Int = items.size
+
+    fun updateItems(newItems: List<Product>) {
+        items = newItems
+        notifyDataSetChanged()
+    }
+}
+```
+
+**Other Android examples:**
+
+- `ArrayAdapter` / `CursorAdapter` — adapts data for `ListView`
+- `PagerAdapter` / `FragmentPagerAdapter` — adapts fragments for `ViewPager`
+- `TypeAdapter` in Gson — adapts custom types to/from JSON
+
+</Accordion>
+
+<Accordion title="Facade pattern — simplifying complex subsystems">
+
+The Facade pattern provides a simplified interface to a complex subsystem. Clients interact with the facade rather than with the multiple underlying components.
+
+```kotlin
+// Complex subsystem components
+class TokenManager {
+    fun getAuthToken(): String = TODO()
+    fun refreshToken(): String = TODO()
+    fun isTokenValid(): Boolean = TODO()
+}
+
+class NetworkClient {
+    fun get(url: String, headers: Map<String, String>): Response = TODO()
+    fun post(url: String, body: String, headers: Map<String, String>): Response = TODO()
+}
+
+class ResponseParser {
+    fun <T> parse(response: Response, type: Class<T>): T = TODO()
+}
+
+// Facade — single entry point for network calls with auth
+class ApiService(
+    private val tokenManager: TokenManager,
+    private val client: NetworkClient,
+    private val parser: ResponseParser
+) {
+    fun <T> get(endpoint: String, responseType: Class<T>): T {
+        val token = if (tokenManager.isTokenValid()) {
+            tokenManager.getAuthToken()
+        } else {
+            tokenManager.refreshToken()
+        }
+        val headers = mapOf("Authorization" to "Bearer $token")
+        val response = client.get(endpoint, headers)
+        return parser.parse(response, responseType)
+    }
+}
+
+// Client uses the facade — unaware of token refresh, parsing, etc.
+val user = apiService.get("/users/42", User::class.java)
+```
+
+**In Android:** Retrofit is itself a facade over OkHttp, HTTP mechanics, and response parsing. `FirebaseAuth` is a facade over the Firebase Authentication subsystem.
+
+</Accordion>
+
+<Accordion title="Dependency Injection pattern — inverting control over dependencies">
+
+Dependency Injection (DI) means that a class receives its dependencies from the outside rather than creating them itself. This decouples classes and makes them independently testable.
+
+**Without DI (tightly coupled):**
+
+```kotlin
+class OrderViewModel {
+    // Creates its own dependency — hard to test, hard to swap
+    private val repository = OrderRepository(RetrofitClient.api, AppDatabase.orderDao)
+}
+```
+
+**With DI (constructor injection):**
+
+```kotlin
+class OrderViewModel(
+    private val repository: OrderRepository
+) : ViewModel() {
+    // Dependency is provided externally
+}
+```
+
+**Hilt (recommended DI framework for Android):**
+
+```kotlin
+// Module providing dependencies
+@Module
+@InstallIn(SingletonComponent::class)
+object NetworkModule {
+
+    @Provides
+    @Singleton
+    fun provideOkHttpClient(): OkHttpClient =
+        OkHttpClient.Builder()
+            .addInterceptor(HttpLoggingInterceptor())
+            .build()
+
+    @Provides
+    @Singleton
+    fun provideRetrofit(client: OkHttpClient): Retrofit =
+        Retrofit.Builder()
+            .baseUrl("https://api.example.com/")
+            .client(client)
+            .addConverterFactory(GsonConverterFactory.create())
+            .build()
+
+    @Provides
+    @Singleton
+    fun provideUserApi(retrofit: Retrofit): UserApi =
+        retrofit.create(UserApi::class.java)
+}
+
+// Hilt injects dependencies automatically
+@HiltViewModel
+class UserViewModel @Inject constructor(
+    private val repository: UserRepository
+) : ViewModel()
+```
+
+**Benefits of DI:**
+
+- Easy to replace real implementations with fakes in tests.
+- Lifecycle and scope management handled by the framework.
+- Eliminates singletons and global state.
+
+</Accordion>
+
+<Accordion title="Strategy pattern — swappable algorithms at runtime">
+
+The Strategy pattern defines a family of algorithms, encapsulates each one, and makes them interchangeable. The algorithm can be changed without modifying the class that uses it.
+
+```kotlin
+// Strategy interface
+interface SortStrategy<T : Comparable<T>> {
+    fun sort(items: MutableList<T>)
+}
+
+// Concrete strategies
+class BubbleSortStrategy<T : Comparable<T>> : SortStrategy<T> {
+    override fun sort(items: MutableList<T>) {
+        for (i in items.indices) {
+            for (j in 0 until items.size - i - 1) {
+                if (items[j] > items[j + 1]) {
+                    val temp = items[j]
+                    items[j] = items[j + 1]
+                    items[j + 1] = temp
+                }
+            }
+        }
+    }
+}
+
+class QuickSortStrategy<T : Comparable<T>> : SortStrategy<T> {
+    override fun sort(items: MutableList<T>) {
+        items.sort()  // delegate to stdlib quicksort
+    }
+}
+
+// Context — uses a strategy
+class DataSorter<T : Comparable<T>>(private var strategy: SortStrategy<T>) {
+    fun setStrategy(strategy: SortStrategy<T>) { this.strategy = strategy }
+    fun sort(items: MutableList<T>) = strategy.sort(items)
+}
+
+// Runtime swap
+val sorter = DataSorter(QuickSortStrategy<Int>())
+sorter.sort(mutableListOf(3, 1, 4, 1, 5))
+sorter.setStrategy(BubbleSortStrategy())  // swap strategy at runtime
+```
+
+**In Android:** `RecyclerView.LayoutManager` is a strategy — you swap `LinearLayoutManager`, `GridLayoutManager`, or `StaggeredGridLayoutManager` to change how items are arranged, without changing the `RecyclerView` itself.
+
+```kotlin
+// Strategy swap at runtime
+recyclerView.layoutManager = if (isGridView) {
+    GridLayoutManager(context, 2)
+} else {
+    LinearLayoutManager(context)
+}
+```
+
+</Accordion>
+
+<Accordion title="Design patterns used in Retrofit's source code">
+
+Retrofit uses several patterns extensively:
+
+**Builder** — `Retrofit.Builder` constructs the Retrofit instance step by step:
+
+```kotlin
+val retrofit = Retrofit.Builder()
+    .baseUrl("https://api.github.com/")
+    .addConverterFactory(GsonConverterFactory.create())
+    .addCallAdapterFactory(RxJava3CallAdapterFactory.create())
+    .build()
+```
+
+**Facade** — `Retrofit` is a facade over OkHttp, serialization, and call dispatching. Users call `.create(ApiService::class.java)` without knowing how HTTP calls are made.
+
+**Proxy (Dynamic Proxy)** — `Retrofit.create()` returns a dynamic proxy of the API interface. At runtime, every interface method call is intercepted by `InvocationHandler`, which builds and executes the real HTTP request.
+
+```kotlin
+// Retrofit internally does something like:
+Proxy.newProxyInstance(
+    service.classLoader,
+    arrayOf(service)
+) { _, method, args ->
+    // Intercept method call, build HTTP request, return Call/Flow/etc.
+    loadServiceMethod(method).invoke(args)
+}
+```
+
+**Adapter** — `CallAdapter.Factory` adapts a raw `Call<T>` into other return types: `Observable<T>` (RxJava), `Deferred<T>` (coroutines), `Flow<T>`.
+
+**Factory** — `Converter.Factory` and `CallAdapter.Factory` are both factories for creating converters and adapters respectively.
+
+</Accordion>
+
+<Accordion title="Design patterns used in Glide">
+
+Glide, Android's popular image loading library, uses multiple patterns:
+
+**Builder** — The request chain (`Glide.with(context).load(url).into(imageView)`) is a builder/fluent interface:
+
+```kotlin
+Glide.with(fragment)
+    .load(imageUrl)
+    .placeholder(R.drawable.placeholder)
+    .error(R.drawable.error)
+    .transform(CircleCrop())
+    .diskCacheStrategy(DiskCacheStrategy.ALL)
+    .into(imageView)
+```
+
+**Object Pool (Flyweight)** — Glide uses a `BitmapPool` to reuse `Bitmap` objects rather than allocating new memory for every image load. This reduces GC pressure significantly.
+
+**Strategy** — `DiskCacheStrategy` is a strategy. You swap `NONE`, `DATA`, `RESOURCE`, `ALL`, or `AUTOMATIC` to change caching behavior at the call site.
+
+**Decorator** — `Transformation` (e.g., `CircleCrop`, `RoundedCorners`) wraps a resource and decorates it with additional processing.
+
+**Observer** — `Target` and `CustomTarget` are observers that Glide notifies when a resource is loaded, failed, or cleared.
+
+**Singleton** — The `Glide` class itself is a singleton managing the global request queue, memory cache, and connection pool.
+
+</Accordion>
+
+<Accordion title="Design patterns used in AOSP (Android Open Source Project)">
+
+AOSP itself is built on many classic patterns:
+
+**Singleton** — `ActivityManagerService`, `PackageManagerService`, and `WindowManagerService` are system-level singletons accessed via `Context.getSystemService()`.
+
+**Observer** — `ContentObserver` notifies clients when data in a `ContentProvider` changes. `BroadcastReceiver` observes system-wide events.
+
+**Factory** — `LayoutInflater` is a factory that creates `View` instances from XML. `BitmapFactory` creates `Bitmap` objects from various sources.
+
+**Template Method** — `Activity` lifecycle (`onCreate` → `onStart` → `onResume` → ...) is a template. AOSP calls the lifecycle methods in a fixed order; you override only the steps you need.
+
+**Command** — `Intent` encapsulates a request (action + data) as an object, allowing it to be queued, serialized, and executed later.
+
+**Proxy** — AIDL-generated code uses the Proxy pattern to communicate across process boundaries. A `Proxy` class on the client side forwards method calls to the server-side `Stub` via Binder IPC.
+
+**Facade** — `Context` is a facade over a large set of Android system services — resource access, starting activities, binding services, etc.
+
+</Accordion>
+
+<Accordion title="Kotlin optional parameters vs Builder pattern — when to choose which">
+
+Kotlin's default parameter values often eliminate the need for a Builder.
+
+**Prefer Kotlin optional parameters when:**
+
+- The object is a simple data class.
+- All parameters have sensible defaults.
+- The API is internal or used only in Kotlin.
+
+```kotlin
+// Kotlin optional parameters — concise
+data class NetworkConfig(
+    val baseUrl: String,
+    val timeoutSeconds: Int = 30,
+    val retryCount: Int = 3,
+    val enableLogging: Boolean = false
+)
+
+val config = NetworkConfig(baseUrl = "https://api.example.com", enableLogging = true)
+```
+
+**Prefer Builder when:**
+
+- The class is consumed from Java code (Java cannot use default parameters via named arguments).
+- Construction involves validation logic that spans multiple fields.
+- Construction is complex enough that a step-by-step API improves readability.
+- You need to build the object incrementally over time before finalizing it.
+
+```kotlin
+// Builder adds value when validation is needed at build() time
+class NetworkConfig private constructor(builder: Builder) {
+    // ...
+    class Builder(val baseUrl: String) {
+        var timeout = 30
+        fun build(): NetworkConfig {
+            require(timeout > 0) { "Timeout must be positive" }
+            require(baseUrl.isNotBlank()) { "Base URL must not be blank" }
+            return NetworkConfig(this)
+        }
+    }
+}
+```
+
+**Rule of thumb:** use named parameters + `data class` for pure Kotlin code. Use Builder for public APIs consumed from Java or when multi-step validation is needed.
+
+</Accordion>
+
+</AccordionGroup>

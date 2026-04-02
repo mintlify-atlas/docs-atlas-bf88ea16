@@ -1,0 +1,742 @@
+---
+title: "Kotlin Fundamentals"
+description: "Core Kotlin language concepts for Android interviews: const vs val, data classes, sealed classes, scope functions, higher-order functions, and more."
+keywords: ["kotlin", "android interview", "const", "val", "data class", "sealed class", "companion object", "extension function", "scope functions", "higher-order functions", "inline", "reified", "lateinit", "lazy"]
+---
+
+Kotlin is the primary language for Android development. This page covers the core language features you need to know for a technical interview, from basic constructs to advanced patterns.
+
+## Variables and constants
+
+<AccordionGroup>
+  <Accordion title="What is the difference between val and var?">
+    `val` declares a **read-only** (immutable reference) variable — you cannot reassign it after initialization. `var` declares a **mutable** variable that can be reassigned freely.
+
+    ```kotlin
+    val name = "Android"  // cannot reassign
+    var count = 0          // can reassign
+    count = 1              // OK
+
+    // name = "iOS"        // compile error
+    ```
+
+    <Note>
+      `val` means the reference is immutable, not the object itself. A `val` list can still have items added to it if it's a `MutableList`.
+    </Note>
+  </Accordion>
+
+  <Accordion title="What is the advantage of using const in Kotlin?">
+    `const val` declares a **compile-time constant**. The value must be a primitive or `String`, and it must be known at compile time. The compiler inlines the value directly at every usage site — no getter or property lookup at runtime.
+
+    `val` is a runtime constant: it may require object allocation and a getter call.
+
+    ```kotlin
+    // compile-time constant — inlined by the compiler
+    const val MAX_RETRY = 3
+    const val BASE_URL = "https://api.example.com"
+
+    // runtime constant — computed or allocated at runtime
+    val timestamp = System.currentTimeMillis()
+    ```
+
+    **Why does this matter?** Using `const val` for truly fixed values (API keys, limits, tag names) produces smaller bytecode, avoids reflective overhead, and allows the value to be used in annotation arguments.
+
+    ```kotlin
+    // const val can be used in annotations; val cannot
+    annotation class Timeout(val ms: Int)
+
+    @Timeout(MAX_RETRY * 1000)
+    fun fetchData() { /* ... */ }
+    ```
+  </Accordion>
+
+  <Accordion title="What is the difference between == and === in Kotlin?">
+    - `==` is **structural equality** — it calls `equals()` under the hood. Two objects are `==` if their contents are equal.
+    - `===` is **referential equality** — it checks whether two references point to the exact same object in memory.
+
+    ```kotlin
+    val a = "hello"
+    val b = "hello"
+    val c = a
+
+    println(a == b)   // true  — same content
+    println(a === b)  // true  — string literals are interned (implementation detail)
+    println(a === c)  // true  — same reference
+
+    data class Point(val x: Int, val y: Int)
+    val p1 = Point(1, 2)
+    val p2 = Point(1, 2)
+    val p3 = p1
+
+    println(p1 == p2)   // true  — data class equals() compares fields
+    println(p1 === p2)  // false — different objects
+    println(p1 === p3)  // true  — same reference
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Null safety and the Elvis operator
+
+<AccordionGroup>
+  <Accordion title="What does ?: do in Kotlin? (Elvis operator)">
+    The **Elvis operator** `?:` provides a default value when an expression is `null`. It evaluates the left-hand side; if it is non-null, that value is returned. If it is null, the right-hand side is evaluated and returned.
+
+    ```kotlin
+    val name: String? = null
+    val displayName = name ?: "Anonymous"  // "Anonymous"
+
+    // Also works to throw an exception
+    val userId = getUserId() ?: throw IllegalStateException("No user logged in")
+
+    // Chaining
+    val result = a ?: b ?: c ?: "default"
+    ```
+
+    The Elvis operator is equivalent to:
+    ```kotlin
+    val displayName = if (name != null) name else "Anonymous"
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Functions
+
+<AccordionGroup>
+  <Accordion title="What is an inline function in Kotlin?">
+    When a lambda is passed to a regular function, the compiler creates an anonymous class for it — this incurs object allocation and virtual dispatch overhead at runtime. Marking a function `inline` tells the compiler to **copy the function body (and any lambda bodies) directly into the call site**, eliminating the overhead.
+
+    ```kotlin
+    inline fun measureTime(block: () -> Unit): Long {
+        val start = System.nanoTime()
+        block()
+        return System.nanoTime() - start
+    }
+
+    // At the call site, the compiler expands this directly —
+    // no lambda object is created.
+    val elapsed = measureTime {
+        heavyComputation()
+    }
+    ```
+
+    **When to use inline:**
+    - Higher-order functions with lambda parameters that are called frequently.
+    - Functions where the lambda needs to use `reified` type parameters.
+    - Avoid inlining large functions — it increases bytecode size.
+  </Accordion>
+
+  <Accordion title="What is the reified keyword in Kotlin?">
+    Kotlin generics are **erased** at runtime (just like Java). The `reified` keyword, used only with `inline` functions, tells the compiler to retain the actual type argument at the call site — making it accessible via reflection inside the function.
+
+    ```kotlin
+    // Without reified — type T is erased at runtime
+    fun <T> fromJson(json: String): T {
+        // Cannot do T::class here — compile error
+    }
+
+    // With reified — T is available at runtime
+    inline fun <reified T> fromJson(json: String): T {
+        return Gson().fromJson(json, T::class.java)
+    }
+
+    // Usage — no explicit class parameter needed
+    val user: User = fromJson(jsonString)
+    ```
+
+    Common use cases: JSON deserialization, `startActivity<MyActivity>()` helpers, type-checked casting.
+  </Accordion>
+
+  <Accordion title="What are higher-order functions and lambdas in Kotlin?">
+    A **higher-order function** is a function that takes one or more functions as parameters, or returns a function. A **lambda** is an anonymous function that can be passed as a value.
+
+    ```kotlin
+    // Higher-order function — takes a lambda parameter
+    fun filter(list: List<Int>, predicate: (Int) -> Boolean): List<Int> {
+        return list.filter(predicate)
+    }
+
+    val evens = filter(listOf(1, 2, 3, 4)) { it % 2 == 0 }
+
+    // Function that returns a function
+    fun multiplier(factor: Int): (Int) -> Int {
+        return { number -> number * factor }
+    }
+
+    val double = multiplier(2)
+    println(double(5))  // 10
+    ```
+
+    Lambdas are first-class citizens in Kotlin — they can be stored in variables, passed as arguments, and returned from functions.
+  </Accordion>
+
+  <Accordion title="What is infix notation in Kotlin?">
+    `infix` functions can be called without the dot and parentheses, making code read more like natural language. The function must be a member function or extension function with exactly one parameter.
+
+    ```kotlin
+    infix fun Int.add(other: Int): Int = this + other
+
+    val result = 3 add 5  // same as 3.add(5)
+
+    // Common use in testing DSLs
+    infix fun <T> T.shouldBe(expected: T) {
+        if (this != expected) throw AssertionError("Expected $expected but was $this")
+    }
+
+    "hello" shouldBe "hello"
+    ```
+  </Accordion>
+
+  <Accordion title="What is noinline and crossinline in Kotlin?">
+    These are modifiers for lambda parameters of `inline` functions.
+
+    **`noinline`** — Marks a specific lambda parameter so it is **not** inlined. Use this when you need to store the lambda in a variable or pass it to a non-inline function.
+
+    ```kotlin
+    inline fun example(inlinedBlock: () -> Unit, noinline storedBlock: () -> Unit) {
+        inlinedBlock()                    // inlined
+        someFunctionThatStores(storedBlock) // not inlined — can be stored
+    }
+    ```
+
+    **`crossinline`** — Marks a lambda that will be called from a different execution context (e.g., inside another lambda or a runnable). It prevents `return` from the lambda from returning from the enclosing function (non-local returns are forbidden).
+
+    ```kotlin
+    inline fun runOnUiThread(crossinline block: () -> Unit) {
+        Handler(Looper.getMainLooper()).post {
+            block()  // runs asynchronously — non-local return would be unsafe
+        }
+    }
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Classes and objects
+
+<AccordionGroup>
+  <Accordion title="What are companion objects in Kotlin?">
+    A `companion object` is a singleton object tied to a class, similar to `static` members in Java. It can access private members of its enclosing class and can implement interfaces.
+
+    ```kotlin
+    class ApiClient private constructor() {
+        companion object {
+            private var instance: ApiClient? = null
+
+            fun getInstance(): ApiClient {
+                return instance ?: ApiClient().also { instance = it }
+            }
+
+            const val DEFAULT_TIMEOUT = 30_000L
+        }
+    }
+
+    // Access without creating an instance
+    val client = ApiClient.getInstance()
+    val timeout = ApiClient.DEFAULT_TIMEOUT
+    ```
+
+    Unlike Java's `static`, companion objects are actual objects — they can implement interfaces and be passed as values.
+  </Accordion>
+
+  <Accordion title="What is a data class in Kotlin?">
+    A `data class` is designed to hold data. The compiler automatically generates `equals()`, `hashCode()`, `toString()`, `copy()`, and `componentN()` functions based on the primary constructor properties.
+
+    ```kotlin
+    data class User(
+        val id: Int,
+        val name: String,
+        val email: String
+    )
+
+    val user1 = User(1, "Alice", "alice@example.com")
+    val user2 = User(1, "Alice", "alice@example.com")
+
+    println(user1 == user2)     // true — structural equality
+    println(user1.toString())   // User(id=1, name=Alice, email=alice@example.com)
+
+    // copy() creates a new instance with some fields changed
+    val updatedUser = user1.copy(email = "newalice@example.com")
+
+    // Destructuring via componentN()
+    val (id, name, email) = user1
+    ```
+
+    **Requirements:** Must have at least one property in the primary constructor. Should not be extended (not `open` by default, and extending can break `equals`/`hashCode` contracts).
+  </Accordion>
+
+  <Accordion title="What are sealed classes in Kotlin?">
+    A `sealed class` restricts class hierarchies — all subclasses must be defined in the same package and module (in Kotlin 1.5+, the same file was required; this was relaxed). The compiler knows all possible subclasses, enabling exhaustive `when` expressions.
+
+    ```kotlin
+    sealed class Result<out T> {
+        data class Success<T>(val data: T) : Result<T>()
+        data class Error(val message: String, val cause: Throwable? = null) : Result<Nothing>()
+        object Loading : Result<Nothing>()
+    }
+
+    // Exhaustive when — no else branch needed
+    fun handleResult(result: Result<User>) = when (result) {
+        is Result.Success -> showUser(result.data)
+        is Result.Error   -> showError(result.message)
+        Result.Loading    -> showSpinner()
+    }
+    ```
+
+    **Common use cases:** UI state representation, network responses, navigation events.
+
+    Sealed classes vs enums: sealed classes can hold different data in each subclass; enum entries all share the same type.
+  </Accordion>
+
+  <Accordion title="What is the open keyword in Kotlin?">
+    In Kotlin, all classes are **final by default** — they cannot be subclassed. The `open` keyword explicitly marks a class or member as inheritable/overridable.
+
+    ```kotlin
+    open class Animal(val name: String) {
+        open fun sound(): String = "..."
+
+        fun breathe() = "inhale/exhale"  // not open — cannot override
+    }
+
+    class Dog(name: String) : Animal(name) {
+        override fun sound(): String = "Woof"
+    }
+    ```
+
+    **`open` vs `public`:** `public` is a visibility modifier (who can access it). `open` is an inheritance modifier (whether it can be overridden). A member can be `public` without being `open`.
+  </Accordion>
+
+  <Accordion title="What is an object declaration in Kotlin? How do you create a singleton?">
+    `object` declarations create a **thread-safe singleton** — the instance is created lazily on first access by the JVM class loader, with no additional synchronization required.
+
+    ```kotlin
+    object DatabaseManager {
+        private var connection: Connection? = null
+
+        fun getConnection(): Connection {
+            return connection ?: createConnection().also { connection = it }
+        }
+    }
+
+    // Access directly by name
+    val conn = DatabaseManager.getConnection()
+    ```
+
+    The Kotlin `object` equivalent of the classic Java double-checked locking singleton — but simpler and safer.
+  </Accordion>
+
+  <Accordion title="What are inline classes in Kotlin?">
+    An **inline class** (value class) wraps a single value and, at runtime, the wrapper is eliminated — the underlying value is used directly. This avoids boxing overhead while still providing type safety.
+
+    ```kotlin
+    @JvmInline
+    value class UserId(val id: Long)
+
+    @JvmInline
+    value class EmailAddress(val value: String)
+
+    fun sendEmail(userId: UserId, email: EmailAddress) { /* ... */ }
+
+    // Compile error — can't accidentally swap the arguments
+    // sendEmail(EmailAddress("a@b.com"), UserId(42L))
+
+    // Correct usage
+    sendEmail(UserId(42L), EmailAddress("a@b.com"))
+    ```
+
+    At runtime, `UserId` is just a `Long` — no wrapper object is allocated.
+  </Accordion>
+</AccordionGroup>
+
+## Initialization
+
+<AccordionGroup>
+  <Accordion title="What is the init block in Kotlin?">
+    The `init` block runs as part of the primary constructor, in the order it appears in the class body alongside property initializers. It is useful for validation logic or setup that requires access to constructor parameters.
+
+    ```kotlin
+    class User(val name: String, val age: Int) {
+        val nameUpperCase: String
+
+        init {
+            require(age >= 0) { "Age cannot be negative" }
+            nameUpperCase = name.uppercase()
+            println("User created: $name")
+        }
+    }
+    ```
+
+    **Order of execution:** primary constructor parameters → property initializers and `init` blocks (top-to-bottom) → secondary constructor bodies.
+  </Accordion>
+
+  <Accordion title="What is the difference between lateinit and lazy in Kotlin?">
+    Both defer initialization, but they serve different purposes.
+
+    **`lateinit`** — For `var` properties that cannot be initialized in the constructor but will be set before first use. Only works with non-nullable reference types (not primitives).
+
+    ```kotlin
+    class MyFragment : Fragment() {
+        lateinit var viewModel: MyViewModel
+
+        override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+            viewModel = ViewModelProvider(this)[MyViewModel::class.java]
+        }
+    }
+
+    // Check initialization before using
+    if (::viewModel.isInitialized) {
+        viewModel.load()
+    }
+    ```
+
+    **`lazy`** — For `val` properties initialized on first access via a lambda. The default mode is `LazyThreadSafetyMode.SYNCHRONIZED` (thread-safe, lazily computed once).
+
+    ```kotlin
+    class ExpensiveService {
+        val repository: UserRepository by lazy {
+            UserRepository(database)  // only created when first accessed
+        }
+    }
+    ```
+
+    | | `lateinit` | `lazy` |
+    |---|---|---|
+    | Mutability | `var` | `val` |
+    | Thread safety | No built-in | Synchronized by default |
+    | Primitives | No | Yes |
+    | Initialization check | `::prop.isInitialized` | `lazyProp.isInitialized()` |
+  </Accordion>
+</AccordionGroup>
+
+## Visibility modifiers
+
+<AccordionGroup>
+  <Accordion title="What are the visibility modifiers in Kotlin?">
+    Kotlin has four visibility modifiers for classes, functions, and properties:
+
+    | Modifier | Scope |
+    |---|---|
+    | `public` | Visible everywhere (default for top-level declarations) |
+    | `private` | Visible only within the file (top-level) or class |
+    | `protected` | Visible in the class and its subclasses |
+    | `internal` | Visible within the same **module** |
+
+    ```kotlin
+    // Top-level
+    private fun helperFunction() { }   // only in this file
+    internal class ModuleHelper { }    // only in this module
+
+    class MyClass {
+        private val secret = "hidden"        // only in MyClass
+        protected val inherited = "shared"   // MyClass + subclasses
+        internal val moduleWide = "module"   // within the module
+        val default = "public"               // everywhere
+    }
+    ```
+
+    **`internal`** is particularly useful in multi-module Android projects: you can expose APIs within a library module without making them public to consumers.
+  </Accordion>
+</AccordionGroup>
+
+## Scope functions
+
+<AccordionGroup>
+  <Accordion title="Explain the use cases of let, run, with, also, and apply.">
+    Scope functions execute a block of code in the context of an object. They differ in how the object is referenced inside the block (`this` vs `it`) and what they return (the object itself vs the result of the block).
+
+    | Function | Context reference | Returns | Use case |
+    |---|---|---|---|
+    | `let` | `it` | lambda result | Null checks, transforming a value |
+    | `run` | `this` | lambda result | Object configuration + result |
+    | `with` | `this` | lambda result | Grouping calls on an object (non-extension) |
+    | `also` | `it` | the object | Side effects without changing the object |
+    | `apply` | `this` | the object | Object configuration/initialization |
+
+    ```kotlin
+    // let — safe call on nullable, transform result
+    val length = nullableString?.let {
+        println("Processing: $it")
+        it.length
+    }
+
+    // apply — builder-style initialization
+    val paint = Paint().apply {
+        color = Color.RED
+        strokeWidth = 5f
+        isAntiAlias = true
+    }
+
+    // also — side effect, return same object
+    val list = mutableListOf(1, 2, 3)
+        .also { println("Initial: $it") }
+
+    // with — multiple operations on the same object
+    val summary = with(user) {
+        "$name is $age years old with email $email"
+    }
+
+    // run — compute a result
+    val isValid = user.run {
+        name.isNotBlank() && age > 0
+    }
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Delegates
+
+<AccordionGroup>
+  <Accordion title="What are delegates in Kotlin?">
+    Kotlin's delegation pattern allows a class or property to delegate its behavior to another object, using the `by` keyword.
+
+    **Class delegation** — Implement an interface by delegating to another object:
+
+    ```kotlin
+    interface Printer {
+        fun print(message: String)
+    }
+
+    class ConsolePrinter : Printer {
+        override fun print(message: String) = println(message)
+    }
+
+    // Logger delegates all Printer calls to ConsolePrinter
+    class Logger(printer: Printer) : Printer by printer {
+        fun log(message: String) {
+            print("[LOG] $message")  // delegated
+        }
+    }
+    ```
+
+    **Property delegation** — Standard library delegates:
+
+    ```kotlin
+    class Settings {
+        // lazy — initialized once on first access
+        val config: Config by lazy { loadConfig() }
+
+        // observable — callback on every change
+        var theme: String by Delegates.observable("light") { _, old, new ->
+            println("Theme changed from $old to $new")
+        }
+
+        // map delegation — useful for dynamic properties
+        val attributes: Map<String, Any> = mapOf("role" to "admin")
+        val role: String by attributes
+    }
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## JVM interop annotations
+
+<AccordionGroup>
+  <Accordion title="What is @JvmStatic in Kotlin?">
+    By default, members of a `companion object` are accessed as instance methods on the companion object from Java. Adding `@JvmStatic` generates an **actual static method** on the enclosing class, enabling idiomatic Java usage.
+
+    ```kotlin
+    class Logger {
+        companion object {
+            @JvmStatic
+            fun log(message: String) = println(message)
+        }
+    }
+    ```
+
+    From Java:
+    ```java
+    // Without @JvmStatic
+    Logger.Companion.log("hello");
+
+    // With @JvmStatic
+    Logger.log("hello");  // clean static call
+    ```
+
+    The `Success.kt` file in this repository uses `@JvmStatic` on its `main` function so it can be run from Java tooling:
+    ```kotlin
+    object Success {
+        @JvmStatic fun main(args: Array<String>) {
+            println("Interviews are tough, so are you :)")
+        }
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="What is @JvmField in Kotlin?">
+    By default, Kotlin properties compile to private fields with getter/setter methods. `@JvmField` instructs the compiler to expose the backing field **directly** as a public Java field, eliminating the getter/setter.
+
+    ```kotlin
+    class Config {
+        @JvmField
+        val timeout = 30_000L
+
+        companion object {
+            @JvmField
+            val DEFAULT_NAME = "default"
+        }
+    }
+    ```
+
+    From Java:
+    ```java
+    // Without @JvmField
+    long t = config.getTimeout();
+
+    // With @JvmField
+    long t = config.timeout;
+    ```
+
+    Use `@JvmField` to reduce boilerplate when exposing constants or fields to Java callers.
+  </Accordion>
+
+  <Accordion title="What is @JvmOverloads in Kotlin?">
+    Kotlin supports default parameter values natively. However, Java callers see only one method signature (all parameters required). `@JvmOverloads` instructs the compiler to generate **overloaded Java methods** for each combination of default parameters.
+
+    ```kotlin
+    @JvmOverloads
+    fun createUser(
+        name: String,
+        age: Int = 0,
+        email: String = ""
+    ): User = User(name, age, email)
+    ```
+
+    Generated Java overloads:
+    ```java
+    createUser(String name)
+    createUser(String name, int age)
+    createUser(String name, int age, String email)
+    ```
+
+    This is especially important for custom `View` constructors in Android, which must match specific Java-style overload patterns.
+  </Accordion>
+</AccordionGroup>
+
+## Collections
+
+<AccordionGroup>
+  <Accordion title="What is the difference between List and Array in Kotlin?">
+    | | `Array` | `List` |
+    |---|---|---|
+    | Type | Fixed-size, invariant | Interface, covariant |
+    | Mutability | Always mutable (elements) | `List` (read-only) or `MutableList` |
+    | Variance | Invariant (`Array<Int>` ≠ `Array<Number>`) | Covariant (`List<Int>` is a `List<Number>`) |
+    | Primitive optimization | `IntArray`, `LongArray`, etc. | No (boxing required) |
+
+    ```kotlin
+    // Array — fixed size, always mutable elements
+    val arr = Array(3) { it * 2 }  // [0, 2, 4]
+    arr[0] = 10                     // OK
+
+    // IntArray — no boxing
+    val ints = intArrayOf(1, 2, 3)
+
+    // List — read-only view
+    val readOnly: List<Int> = listOf(1, 2, 3)
+
+    // MutableList — add/remove
+    val mutable: MutableList<Int> = mutableListOf(1, 2, 3)
+    mutable.add(4)
+    ```
+
+    Prefer `List`/`MutableList` in Kotlin code for idiomatic style; use primitive arrays (`IntArray`, etc.) when performance is critical.
+  </Accordion>
+
+  <Accordion title="Tell about collections in Kotlin.">
+    Kotlin's standard library provides three collection types, each with read-only and mutable variants:
+
+    - **List** — ordered, allows duplicates: `listOf()` / `mutableListOf()`
+    - **Set** — unordered, unique elements: `setOf()` / `mutableSetOf()`
+    - **Map** — key-value pairs, unique keys: `mapOf()` / `mutableMapOf()`
+
+    ```kotlin
+    // List
+    val names = listOf("Alice", "Bob", "Alice")  // [Alice, Bob, Alice]
+
+    // Set
+    val unique = setOf("Alice", "Bob", "Alice")  // [Alice, Bob]
+
+    // Map
+    val scores = mapOf("Alice" to 95, "Bob" to 87)
+    val aliceScore = scores["Alice"]  // 95
+
+    // Useful collection operations
+    val numbers = listOf(1, 2, 3, 4, 5)
+    val evens = numbers.filter { it % 2 == 0 }         // [2, 4]
+    val doubled = numbers.map { it * 2 }                // [2, 4, 6, 8, 10]
+    val sum = numbers.fold(0) { acc, n -> acc + n }     // 15
+
+    // associateBy — List to Map
+    data class User(val id: Int, val name: String)
+    val users = listOf(User(1, "Alice"), User(2, "Bob"))
+    val byId = users.associateBy { it.id }  // Map<Int, User>
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Strings
+
+<AccordionGroup>
+  <Accordion title="What is the difference between String, StringBuffer, and StringBuilder?">
+    | | `String` | `StringBuffer` | `StringBuilder` |
+    |---|---|---|---|
+    | Mutability | Immutable | Mutable | Mutable |
+    | Thread safety | N/A (immutable) | Thread-safe (synchronized) | Not thread-safe |
+    | Performance | Slow for concatenation in loops | Slower than StringBuilder | Fastest for single-threaded use |
+
+    ```kotlin
+    // String — each concatenation creates a new object
+    var result = ""
+    for (i in 0..999) {
+        result += i  // creates 1000 intermediate String objects
+    }
+
+    // StringBuilder — mutable, efficient, single-threaded
+    val sb = StringBuilder()
+    for (i in 0..999) {
+        sb.append(i)
+    }
+    val result2 = sb.toString()
+
+    // StringBuffer — same as StringBuilder but synchronized
+    val sbuf = StringBuffer()
+    // safe to use from multiple threads, but adds locking overhead
+    ```
+
+    In Kotlin, string templates (`"Hello, $name!"`) are compiled to efficient `StringBuilder` operations, so prefer templates for simple concatenation.
+  </Accordion>
+</AccordionGroup>
+
+## Kotlin Multiplatform
+
+<AccordionGroup>
+  <Accordion title="How does Kotlin Multiplatform work?">
+    Kotlin Multiplatform (KMP) allows you to share code across platforms — Android, iOS, JVM, JS, and native — by compiling Kotlin to the appropriate target:
+
+    - **Android / JVM:** Compiled to JVM bytecode.
+    - **iOS / native:** Compiled to native binaries via Kotlin/Native (LLVM).
+    - **Web:** Compiled to JavaScript or WebAssembly via Kotlin/JS or Kotlin/Wasm.
+
+    **`expect` / `actual` mechanism** — The key to platform-specific implementations:
+
+    ```kotlin
+    // commonMain — shared code
+    expect fun currentTimeMillis(): Long
+
+    expect class PlatformLogger() {
+        fun log(message: String)
+    }
+
+    // androidMain — Android implementation
+    actual fun currentTimeMillis(): Long = System.currentTimeMillis()
+
+    actual class PlatformLogger actual constructor() {
+        actual fun log(message: String) = android.util.Log.d("APP", message)
+    }
+
+    // iosMain — iOS implementation
+    actual fun currentTimeMillis(): Long =
+        (NSDate().timeIntervalSince1970 * 1000).toLong()
+    ```
+
+    Business logic, data models, repository layer, and networking code can live in `commonMain` and be shared; platform-specific UI and system APIs use `expect`/`actual`.
+  </Accordion>
+</AccordionGroup>

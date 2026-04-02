@@ -1,0 +1,604 @@
+---
+title: "UI and Views"
+description: "Interview questions on Android Views, RecyclerView, layouts, custom views, Canvas, and UI performance."
+keywords: ["android", "RecyclerView", "ViewHolder", "DiffUtil", "SnapHelper", "ConstraintLayout", "custom view", "Canvas", "SurfaceView", "SpannableString", "ListView", "ViewGroup"]
+---
+
+Android's UI system is built on a tree of `View` and `ViewGroup` objects. This page covers everything from the basics of Views to RecyclerView internals and performance optimizations.
+
+## Views and ViewGroups
+
+<AccordionGroup>
+  <Accordion title="What is the difference between View and ViewGroup?">
+    **View** — the basic building block of UI. A `View` occupies a rectangular area on screen and is responsible for drawing and event handling. Examples: `TextView`, `Button`, `ImageView`, `EditText`. All UI elements ultimately extend `android.view.View`.
+
+    **ViewGroup** — an invisible container that holds and arranges child `View`s and other `ViewGroup`s. It is the base class for layouts. Examples: `LinearLayout`, `RelativeLayout`, `ConstraintLayout`, `FrameLayout`.
+
+    ```
+    ViewGroup (ConstraintLayout)
+    ├── View (ImageView)       ← leaf node
+    ├── View (TextView)        ← leaf node
+    └── ViewGroup (LinearLayout)
+        ├── View (Button)      ← leaf node
+        └── View (TextView)    ← leaf node
+    ```
+
+    The UI is a **view tree** (or view hierarchy). The system traverses this tree during three phases: **measure** (determine size), **layout** (determine position), and **draw** (render to canvas).
+  </Accordion>
+
+  <Accordion title="What is the difference between View.GONE and View.INVISIBLE?">
+    Both hide a View, but they differ in whether the View still occupies space in the layout.
+
+    | Visibility | Drawn on screen | Takes up layout space |
+    |---|---|---|
+    | `VISIBLE` | Yes | Yes |
+    | `INVISIBLE` | No | **Yes** |
+    | `GONE` | No | **No** |
+
+    ```kotlin
+    // View is hidden but still occupies its original space
+    myView.visibility = View.INVISIBLE
+
+    // View is hidden and takes up no space — siblings reposition
+    myView.visibility = View.GONE
+
+    // View is visible
+    myView.visibility = View.VISIBLE
+    ```
+
+    Use `INVISIBLE` when you want to hide a View temporarily but keep the layout stable (no sibling repositioning). Use `GONE` when the View should not affect the layout at all while hidden.
+  </Accordion>
+
+  <Accordion title="What is Canvas in Android?">
+    `Canvas` is the 2D drawing surface provided to a View during the `onDraw()` callback. It provides methods to draw primitives — rectangles, circles, lines, text, bitmaps, and paths — using a `Paint` object to define color, style, stroke width, and other drawing properties.
+
+    ```kotlin
+    class CircleProgressView @JvmOverloads constructor(
+        context: Context,
+        attrs: AttributeSet? = null
+    ) : View(context, attrs) {
+
+        private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.BLUE
+            style = Paint.Style.STROKE
+            strokeWidth = 12f
+        }
+
+        private var progress = 0.75f
+
+        override fun onDraw(canvas: Canvas) {
+            super.onDraw(canvas)
+            val cx = width / 2f
+            val cy = height / 2f
+            val radius = minOf(cx, cy) - paint.strokeWidth
+
+            // Draw background circle
+            paint.color = Color.LTGRAY
+            canvas.drawCircle(cx, cy, radius, paint)
+
+            // Draw progress arc
+            paint.color = Color.BLUE
+            val oval = RectF(cx - radius, cy - radius, cx + radius, cy + radius)
+            canvas.drawArc(oval, -90f, 360f * progress, false, paint)
+        }
+    }
+    ```
+
+    <Tip>
+      Always call `invalidate()` when the data powering a custom View changes to trigger a redraw. Call `requestLayout()` if the size may also change.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="What is SurfaceView?">
+    `SurfaceView` provides a dedicated drawing surface embedded in the View hierarchy. Unlike a regular `View` (which is drawn on the UI thread), `SurfaceView` can be drawn from a **background thread**, making it suitable for continuously updating content like video, games, and camera preview.
+
+    The key component is the `SurfaceHolder`, which controls access to the underlying `Surface`. Drawing is done by locking the canvas, drawing, then unlocking and posting.
+
+    ```kotlin
+    class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback {
+        private var drawingThread: DrawingThread? = null
+
+        init {
+            holder.addCallback(this)
+        }
+
+        override fun surfaceCreated(holder: SurfaceHolder) {
+            drawingThread = DrawingThread(holder).also { it.start() }
+        }
+
+        override fun surfaceDestroyed(holder: SurfaceHolder) {
+            drawingThread?.running = false
+            drawingThread?.join()
+        }
+
+        override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {}
+    }
+    ```
+
+    **SurfaceView vs TextureView:** `SurfaceView` has its own window/layer (more efficient, less flexible for transformations). `TextureView` is a regular View that can be rotated/scaled/translated but composites on the UI thread (more overhead).
+  </Accordion>
+
+  <Accordion title="What is a SpannableString?">
+    `SpannableString` is a `CharSequence` implementation that allows applying multiple **spans** — rich text formatting instructions — to different ranges of the same string. Spans can change text appearance (color, size, style), add click behavior, or control drawing.
+
+    The text content is **immutable** once set, but spans can be added and removed freely.
+
+    ```kotlin
+    val text = SpannableString("Hello, Android World!")
+
+    // Red color for "Android"
+    text.setSpan(
+        ForegroundColorSpan(Color.RED),
+        7, 14,
+        Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
+    )
+
+    // Bold + underline for "World"
+    text.setSpan(StyleSpan(Typeface.BOLD), 15, 20, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+    text.setSpan(UnderlineSpan(), 15, 20, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+
+    // Clickable link
+    text.setSpan(object : ClickableSpan() {
+        override fun onClick(widget: View) { /* handle click */ }
+    }, 15, 20, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+
+    textView.text = text
+    textView.movementMethod = LinkMovementMethod.getInstance()
+    ```
+
+    Use `SpannableStringBuilder` when you need to modify both the text content and spans.
+  </Accordion>
+
+  <Accordion title="What is Dialog vs DialogFragment?">
+    **`Dialog`** is a simple popup window. Creating and showing a `Dialog` directly ties it to the Activity. If the Activity is recreated (e.g., screen rotation), the Dialog is lost and must be manually recreated.
+
+    **`DialogFragment`** wraps a `Dialog` inside a Fragment, giving it access to the full Fragment lifecycle. It survives configuration changes automatically and integrates with the Fragment back stack.
+
+    ```kotlin
+    class ConfirmDialogFragment : DialogFragment() {
+
+        override fun onCreateDialog(savedInstanceState: Bundle?): Dialog {
+            return AlertDialog.Builder(requireContext())
+                .setTitle("Confirm")
+                .setMessage("Are you sure?")
+                .setPositiveButton("Yes") { _, _ -> /* confirm */ }
+                .setNegativeButton("Cancel", null)
+                .create()
+        }
+    }
+
+    // Show from an Activity or Fragment
+    ConfirmDialogFragment().show(supportFragmentManager, "confirm_dialog")
+    ```
+
+    **Always prefer `DialogFragment`** over raw `Dialog` in modern Android development — it handles lifecycle correctly and avoids `WindowLeaked` exceptions caused by showing dialogs after the Activity is destroyed.
+  </Accordion>
+
+  <Accordion title="What is Toast?">
+    A `Toast` is a short, non-interactive message that appears briefly on screen and disappears automatically. It is used for lightweight, ephemeral user feedback.
+
+    ```kotlin
+    // Short duration (2 seconds)
+    Toast.makeText(context, "Saved successfully", Toast.LENGTH_SHORT).show()
+
+    // Long duration (3.5 seconds)
+    Toast.makeText(context, "Operation failed, please retry", Toast.LENGTH_LONG).show()
+    ```
+
+    **Limitations of Toast:**
+    - Not interactive (no buttons or actions)
+    - Cannot be dismissed by the user
+    - May be queued and delayed if multiple toasts are shown rapidly
+    - On Android 11+, background apps can no longer show toasts (they are suppressed)
+
+    For more control, use `Snackbar` (from Material Design) which supports actions, can be dismissed by swipe, and is anchored to a specific view.
+  </Accordion>
+</AccordionGroup>
+
+## Layouts
+
+<AccordionGroup>
+  <Accordion title="What is the difference between LinearLayout and RelativeLayout?">
+    **`LinearLayout`** arranges children in a single row or column (horizontal or vertical). Simple and predictable. Supports `weight` to distribute space proportionally.
+
+    **`RelativeLayout`** arranges children relative to each other or the parent container. More flexible for complex layouts but can lead to deeply nested hierarchies if overused.
+
+    ```xml
+    <!-- LinearLayout — vertical stack -->
+    <LinearLayout android:orientation="vertical">
+        <TextView android:id="@+id/title" ... />
+        <TextView android:id="@+id/subtitle" android:layout_below="@id/title" ... />
+    </LinearLayout>
+
+    <!-- RelativeLayout — subtitle below title -->
+    <RelativeLayout>
+        <TextView android:id="@+id/title" ... />
+        <TextView android:id="@+id/subtitle" android:layout_below="@id/title" ... />
+    </RelativeLayout>
+    ```
+
+    **Performance:** `RelativeLayout` performs two measure passes per layout (to resolve relative positioning), which is slower than a single-pass `LinearLayout`. For most complex layouts, prefer `ConstraintLayout` which is flat and efficient.
+  </Accordion>
+
+  <Accordion title="What is ConstraintLayout and how is it optimized?">
+    `ConstraintLayout` allows building complex, flat view hierarchies by defining positional constraints between views. It eliminates the need for nested `LinearLayout`s and `RelativeLayout`s, keeping the view tree shallow.
+
+    **Internal optimization:** ConstraintLayout uses the **Cassowary constraint-solving algorithm** to resolve all constraints in a single pass, unlike `RelativeLayout` (two passes) or nested layouts (exponential passes with depth).
+
+    **Key features:**
+    - **Chains** — distribute space between views horizontally or vertically
+    - **Guidelines** — invisible anchors for relative positioning
+    - **Barriers** — constraints that adapt to the largest child view
+    - **Groups** — control visibility of multiple views at once
+    - **MotionLayout** — animate transitions between constraint sets
+
+    <Tip>
+      Reducing view hierarchy depth is one of the most impactful layout performance improvements. A flat `ConstraintLayout` outperforms five levels of nested `LinearLayout`.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="What are best practices for text in Android?">
+    - **Use `sp` (scale-independent pixels)** for text sizes — this respects the user's system font size setting.
+    - **Use string resources** (`res/values/strings.xml`) for all user-visible text — enables localization.
+    - **Use `android:ellipsize` and `android:maxLines`** to handle text overflow gracefully.
+    - **Avoid hardcoded colors** — use theme attributes (`?attr/colorOnSurface`) for proper dark mode support.
+    - **Use `TextAppearance` styles** for consistent typography across the app.
+    - **Prefer `MaterialTextView`** (or `AppCompatTextView`) over plain `TextView` for Material Design compatibility.
+    - **Use `Hyphenation` and `BreakStrategy`** for better line-breaking on longer text.
+
+    ```xml
+    <TextView
+        android:text="@string/my_text"
+        android:textSize="16sp"
+        android:textAppearance="?attr/textAppearanceBodyMedium"
+        android:ellipsize="end"
+        android:maxLines="2" />
+    ```
+  </Accordion>
+
+  <Accordion title="How do you optimize layouts in Android?">
+    - **Flatten the hierarchy** — use `ConstraintLayout` instead of nested layouts. Each additional nesting level multiplies the measure/layout passes.
+    - **Use `<merge>`** — eliminates a redundant root ViewGroup when a layout is included in another layout via `<include>`.
+    - **Use `<ViewStub>`** — a zero-size placeholder that inflates its target layout only when explicitly told to. Defer inflation of views that are not immediately needed (error states, empty states).
+    - **Avoid unnecessary background drawing** — overdraw adds GPU cost.
+    - **Use Layout Inspector** in Android Studio to identify deep hierarchies and overdraw.
+    - **Prefer `RecyclerView`** over `ScrollView` with many children — `RecyclerView` recycles views; `ScrollView` inflates all children immediately.
+  </Accordion>
+
+  <Accordion title="How do you optimize view tree depth?">
+    View tree depth directly impacts rendering performance. Each level adds a measure pass and a layout pass. Deeply nested hierarchies can cause **hierarchical measure** problems — the number of measure operations grows exponentially with depth.
+
+    **Strategies to reduce depth:**
+    1. Replace nested `LinearLayout`s with a single `ConstraintLayout`
+    2. Use the `<merge>` tag in included layouts to remove a redundant root view
+    3. Use `ViewStub` for rarely-shown views
+    4. Consider custom `ViewGroup`s for specialized repeated layouts (more efficient than generic layout XML)
+    5. Use **Layout Inspector** → "3D view" to visualize nesting depth
+
+    ```xml
+    <!-- Before: 3 levels deep -->
+    <LinearLayout>
+        <LinearLayout>
+            <TextView />
+            <TextView />
+        </LinearLayout>
+    </LinearLayout>
+
+    <!-- After: 1 level with ConstraintLayout -->
+    <ConstraintLayout>
+        <TextView app:layout_constraintTop_toTopOf="parent" ... />
+        <TextView app:layout_constraintTop_toBottomOf="@id/first" ... />
+    </ConstraintLayout>
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Custom Views
+
+<AccordionGroup>
+  <Accordion title="How do you create a custom View?">
+    Creating a custom `View` involves extending `View` (or an existing View subclass) and overriding key methods.
+
+    **Steps:**
+    1. Extend `View` or a subclass
+    2. Provide the required constructors (annotate with `@JvmOverloads`)
+    3. Override `onMeasure()` to define the View's size
+    4. Override `onDraw()` to render the View
+    5. Optionally: define custom XML attributes in `res/values/attrs.xml`
+
+    ```kotlin
+    class RatingBarView @JvmOverloads constructor(
+        context: Context,
+        attrs: AttributeSet? = null,
+        defStyleAttr: Int = 0
+    ) : View(context, attrs, defStyleAttr) {
+
+        private val starPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.YELLOW
+            style = Paint.Style.FILL
+        }
+
+        var rating: Float = 3f
+            set(value) {
+                field = value.coerceIn(0f, 5f)
+                invalidate() // request redraw
+            }
+
+        override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+            val desiredWidth = 200
+            val desiredHeight = 40
+            val width = resolveSize(desiredWidth, widthMeasureSpec)
+            val height = resolveSize(desiredHeight, heightMeasureSpec)
+            setMeasuredDimension(width, height)
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            super.onDraw(canvas)
+            // Draw stars based on rating value
+            for (i in 0 until 5) {
+                starPaint.color = if (i < rating) Color.YELLOW else Color.LTGRAY
+                canvas.drawRect(
+                    i * 42f, 4f,
+                    i * 42f + 38f, height - 4f,
+                    starPaint
+                )
+            }
+        }
+    }
+    ```
+
+    <Note>
+      Always use `resolveSize()` or `MeasureSpec` utilities in `onMeasure()` to respect the parent's layout constraints. Never hardcode dimensions without respecting `MeasureSpec`.
+    </Note>
+  </Accordion>
+</AccordionGroup>
+
+## RecyclerView
+
+<AccordionGroup>
+  <Accordion title="What is RecyclerView and how does it work internally?">
+    `RecyclerView` is a flexible, efficient widget for displaying a large scrollable list of items. It is the modern replacement for `ListView`.
+
+    **How it works internally:**
+    1. `RecyclerView` asks the `LayoutManager` to position items on screen
+    2. The `LayoutManager` requests a `ViewHolder` from the `RecyclerView.RecycledViewPool`
+    3. If no recycled `ViewHolder` is available, the `Adapter.onCreateViewHolder()` is called to inflate a new one
+    4. `Adapter.onBindViewHolder()` is called to bind data to the `ViewHolder`
+    5. As the user scrolls, off-screen Views are **detached** and placed into the `RecycledViewPool` by type
+    6. When the same view type scrolls back into view, a recycled `ViewHolder` is retrieved and rebound — no new inflation needed
+
+    The pool has two tiers: **Scrap** (views that were just detached and are likely to be re-attached in the same layout pass — zero rebind cost) and **RecycledViewPool** (views available for rebinding across all lists).
+  </Accordion>
+
+  <Accordion title="Why is RecyclerView preferred over ListView?">
+    | Feature | ListView | RecyclerView |
+    |---|---|---|
+    | ViewHolder pattern | Optional (manual) | Enforced |
+    | Layout flexibility | Vertical list only | Linear, Grid, Staggered Grid, custom |
+    | Item animations | Limited | Built-in `ItemAnimator` |
+    | Item decoration | None built-in | `ItemDecoration` API |
+    | DiffUtil support | None | First-class |
+    | Click listeners | Built-in `OnItemClickListener` | Must implement manually |
+    | View recycling | Basic | Optimized multi-level pool |
+
+    RecyclerView's enforced ViewHolder pattern prevents the common ListView anti-pattern of calling `findViewById()` on every bind, which is expensive.
+  </Accordion>
+
+  <Accordion title="What are the main components of RecyclerView?">
+    **`RecyclerView.Adapter`** — bridges your data set and the `RecyclerView`. Responsible for creating `ViewHolder`s and binding data to them. Must implement:
+    - `onCreateViewHolder()` — inflate the item layout and create a `ViewHolder`
+    - `onBindViewHolder()` — bind data to the `ViewHolder` at the given position
+    - `getItemCount()` — return the number of items
+
+    **`RecyclerView.ViewHolder`** — holds references to the Views in one item layout. Eliminates repeated `findViewById()` calls during binding.
+
+    **`LayoutManager`** — controls how items are measured, positioned, and recycled. Built-in implementations:
+    - `LinearLayoutManager` — vertical or horizontal list
+    - `GridLayoutManager` — fixed-column grid
+    - `StaggeredGridLayoutManager` — grid with variable item heights
+
+    ```kotlin
+    class UserAdapter(private val users: List<User>) :
+        RecyclerView.Adapter<UserAdapter.ViewHolder>() {
+
+        class ViewHolder(view: View) : RecyclerView.ViewHolder(view) {
+            val nameText: TextView = view.findViewById(R.id.tv_name)
+            val avatarImage: ImageView = view.findViewById(R.id.iv_avatar)
+        }
+
+        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {
+            val view = LayoutInflater.from(parent.context)
+                .inflate(R.layout.item_user, parent, false)
+            return ViewHolder(view)
+        }
+
+        override fun onBindViewHolder(holder: ViewHolder, position: Int) {
+            val user = users[position]
+            holder.nameText.text = user.name
+            // Load avatar with Glide or Coil
+        }
+
+        override fun getItemCount() = users.size
+    }
+
+    // In Activity/Fragment
+    recyclerView.layoutManager = LinearLayoutManager(context)
+    recyclerView.adapter = UserAdapter(userList)
+    ```
+  </Accordion>
+
+  <Accordion title="What is DiffUtil and how does it improve RecyclerView performance?">
+    `DiffUtil` is a utility class that calculates the **minimum number of changes** needed to transform one list into another, using the Myers difference algorithm. It then dispatches precise change notifications to the adapter — only inserting, removing, or updating the items that actually changed.
+
+    Without DiffUtil, you would call `notifyDataSetChanged()`, which forces every visible item to rebind and disables default item change animations.
+
+    ```kotlin
+    class UserDiffCallback(
+        private val oldList: List<User>,
+        private val newList: List<User>
+    ) : DiffUtil.Callback() {
+
+        override fun getOldListSize() = oldList.size
+        override fun getNewListSize() = newList.size
+
+        override fun areItemsTheSame(oldPos: Int, newPos: Int): Boolean =
+            oldList[oldPos].id == newList[newPos].id
+
+        override fun areContentsTheSame(oldPos: Int, newPos: Int): Boolean =
+            oldList[oldPos] == newList[newPos]
+    }
+
+    // Calculate and dispatch diff
+    val diffResult = DiffUtil.calculateDiff(UserDiffCallback(oldList, newList))
+    adapter.submitList(newList)
+    diffResult.dispatchUpdatesTo(adapter)
+    ```
+
+    <Tip>
+      Use `ListAdapter` (which extends `RecyclerView.Adapter`) — it runs `DiffUtil` on a background thread automatically via `AsyncListDiffer`. Just implement `DiffUtil.ItemCallback` and call `submitList()`.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="What does setHasFixedSize(true) do?">
+    When `setHasFixedSize(true)` is called, `RecyclerView` assumes its own size does not change when the adapter content changes. This allows it to skip the expensive `requestLayout()` call on the parent when items are added, removed, or changed.
+
+    Instead of measuring and laying out the entire hierarchy again, `RecyclerView` can handle the change internally.
+
+    ```kotlin
+    recyclerView.setHasFixedSize(true)
+    ```
+
+    **When to use it:** Set it to `true` when the `RecyclerView`'s width and height are fixed (e.g., `match_parent` or a fixed `dp` value) and do not depend on the number of items. Do not use it if the `RecyclerView`'s size is `wrap_content`.
+  </Accordion>
+
+  <Accordion title="How do you handle multiple view types in RecyclerView?">
+    Override `getItemViewType()` to return a unique integer for each view type. Then create and bind different `ViewHolder` subclasses based on the type.
+
+    ```kotlin
+    class FeedAdapter(private val items: List<FeedItem>) :
+        RecyclerView.Adapter<RecyclerView.ViewHolder>() {
+
+        companion object {
+            const val TYPE_TEXT = 0
+            const val TYPE_IMAGE = 1
+            const val TYPE_AD = 2
+        }
+
+        override fun getItemViewType(position: Int): Int = when (items[position]) {
+            is FeedItem.Text -> TYPE_TEXT
+            is FeedItem.Image -> TYPE_IMAGE
+            is FeedItem.Ad -> TYPE_AD
+        }
+
+        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder {
+            val inflater = LayoutInflater.from(parent.context)
+            return when (viewType) {
+                TYPE_TEXT -> TextViewHolder(inflater.inflate(R.layout.item_text, parent, false))
+                TYPE_IMAGE -> ImageViewHolder(inflater.inflate(R.layout.item_image, parent, false))
+                else -> AdViewHolder(inflater.inflate(R.layout.item_ad, parent, false))
+            }
+        }
+
+        override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
+            when (holder) {
+                is TextViewHolder -> holder.bind(items[position] as FeedItem.Text)
+                is ImageViewHolder -> holder.bind(items[position] as FeedItem.Image)
+                is AdViewHolder -> holder.bind(items[position] as FeedItem.Ad)
+            }
+        }
+
+        override fun getItemCount() = items.size
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="How do you update a specific item in RecyclerView?">
+    Use the adapter's specific notification methods rather than `notifyDataSetChanged()`:
+
+    ```kotlin
+    // Update a single item
+    adapter.notifyItemChanged(position)
+
+    // Update with a payload (for partial rebind — e.g., only update like count)
+    adapter.notifyItemChanged(position, "like_count_changed")
+
+    // Insert an item
+    adapter.notifyItemInserted(position)
+
+    // Remove an item
+    adapter.notifyItemRemoved(position)
+
+    // Move an item
+    adapter.notifyItemMoved(fromPosition, toPosition)
+
+    // Update a range
+    adapter.notifyItemRangeChanged(startPosition, itemCount)
+    ```
+
+    Using specific notifications allows `RecyclerView` to run the appropriate item change animations and avoids rebinding unaffected items.
+  </Accordion>
+
+  <Accordion title="What is SnapHelper?">
+    `SnapHelper` is an abstract class that snaps `RecyclerView` items into position when the user stops scrolling. It ensures items are aligned to specific positions (e.g., center, start/end) rather than stopping at arbitrary offsets.
+
+    **Built-in implementations:**
+    - `LinearSnapHelper` — snaps the nearest item to the center of the `RecyclerView`
+    - `PagerSnapHelper` — snaps one item at a time (like ViewPager behavior)
+
+    ```kotlin
+    val snapHelper = PagerSnapHelper()
+    snapHelper.attachToRecyclerView(recyclerView)
+
+    // or for center snapping:
+    LinearSnapHelper().attachToRecyclerView(recyclerView)
+    ```
+
+    Common use case: horizontal carousels where each card should snap to the center when the user releases.
+  </Accordion>
+
+  <Accordion title="How do you optimize RecyclerView scrolling performance?">
+    - **Use `DiffUtil` / `ListAdapter`** instead of `notifyDataSetChanged()` to minimize rebinds
+    - **Set `setHasFixedSize(true)`** when the RecyclerView size is fixed
+    - **Avoid heavy work in `onBindViewHolder()`** — no network calls, database access, or synchronous image loading
+    - **Use `ViewBinding` or `DataBinding`** to eliminate `findViewById()` overhead in ViewHolder
+    - **Cache image loading results** — use Glide or Coil with their built-in memory/disk caches
+    - **Prefetch** — `RecyclerView` has built-in prefetch (`setItemPrefetchEnabled(true)`) that inflates the next item on the render thread during idle time
+    - **Avoid overdraw** in item layouts — keep item view hierarchy shallow
+    - **Use `RecycleChildrenOnDetach`** in `LinearLayoutManager` for off-screen items
+
+    ```kotlin
+    // Enable prefetch (on by default for LinearLayoutManager)
+    (recyclerView.layoutManager as LinearLayoutManager).initialPrefetchItemCount = 4
+
+    // Recycle children when off-screen (for nested scroll scenarios)
+    (recyclerView.layoutManager as LinearLayoutManager).recycleChildrenOnDetach = true
+    ```
+  </Accordion>
+
+  <Accordion title="How do you optimize nested RecyclerViews with setRecycledViewPool?">
+    In a nested `RecyclerView` layout (e.g., a vertical list where each row contains a horizontal list), each inner `RecyclerView` has its own `RecycledViewPool` by default. When a row scrolls off screen and returns, the inner `RecyclerView`'s pool is wiped.
+
+    **Sharing a `RecycledViewPool`** across all inner `RecyclerView`s means ViewHolders from one row's horizontal list can be reused by another row's horizontal list — dramatically reducing inflation cost.
+
+    ```kotlin
+    val sharedPool = RecyclerView.RecycledViewPool()
+    // Increase pool size if your inner lists have many items visible
+    sharedPool.setMaxRecycledViews(TYPE_ITEM, 20)
+
+    outerAdapter.onBindViewHolder = { holder, position ->
+        val innerRecyclerView = holder.innerRecyclerView
+        innerRecyclerView.setRecycledViewPool(sharedPool)
+        innerRecyclerView.layoutManager = LinearLayoutManager(
+            context, LinearLayoutManager.HORIZONTAL, false
+        ).apply {
+            initialPrefetchItemCount = 4
+            recycleChildrenOnDetach = true
+        }
+    }
+    ```
+
+    <Tip>
+      Also set `initialPrefetchItemCount` on the inner `LinearLayoutManager` equal to the number of visible items in the horizontal list. This hints to `RecyclerView`'s prefetch mechanism how many items to inflate ahead of time.
+    </Tip>
+  </Accordion>
+</AccordionGroup>

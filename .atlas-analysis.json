@@ -1,0 +1,94 @@
+{
+  "projectType": "general",
+  "projectName": "Android Interview Questions",
+  "projectDescription": "A comprehensive cheat sheet of Android interview questions and answers covering Kotlin, Coroutines, Flow, Android core, Jetpack, architecture, design patterns, libraries, testing, and Java.",
+  "theme": "almond",
+  "primaryColor": "#4c44e4",
+  "lightColor": "#a49cd8",
+  "darkColor": "#eeeef5",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Interview Guide",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "how-to-use"
+            ]
+          },
+          {
+            "group": "Kotlin",
+            "pages": [
+              "kotlin/kotlin-fundamentals",
+              "kotlin/kotlin-coroutines",
+              "kotlin/kotlin-flow"
+            ]
+          },
+          {
+            "group": "Android Core",
+            "pages": [
+              "android/android-fundamentals",
+              "android/activity-and-fragment",
+              "android/ui-and-views",
+              "android/services-and-background",
+              "android/jetpack-components",
+              "android/performance-and-memory"
+            ]
+          },
+          {
+            "group": "Architecture & Patterns",
+            "pages": [
+              "architecture/android-architecture",
+              "architecture/design-patterns",
+              "architecture/android-system-design"
+            ]
+          },
+          {
+            "group": "Libraries & Tools",
+            "pages": [
+              "libraries/networking-libraries",
+              "libraries/dependency-injection",
+              "libraries/rxjava",
+              "tools/android-tools-and-testing"
+            ]
+          },
+          {
+            "group": "Java & Other Topics",
+            "pages": [
+              "java/java-fundamentals",
+              "java/java-concurrency",
+              "other/jetpack-compose",
+              "other/other-topics"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Comprehensive Kotlin and Kotlin Coroutines interview questions with answers",
+    "Kotlin Flow API topics including StateFlow, SharedFlow, and operators",
+    "Android core concepts: Activity/Fragment lifecycle, Views, Services, Intents",
+    "Jetpack components: ViewModel, LiveData, WorkManager, Navigation",
+    "Android architecture patterns: MVVM, MVI, Clean Architecture",
+    "Popular Android libraries: Retrofit, OkHttp, Dagger/Hilt, Glide",
+    "Android System Design questions for senior roles",
+    "Unit testing with Coroutines, Flow, Mockito, Espresso",
+    "Java OOP, concurrency, and memory management questions",
+    "Jetpack Compose fundamentals and state management"
+  ],
+  "publicApiSurface": [
+    "Kotlin Coroutines: launch, async, withContext, suspend, Flow",
+    "Android Activity lifecycle: onCreate, onStart, onResume, onPause, onStop, onDestroy",
+    "Android Fragment lifecycle and backstack management",
+    "RecyclerView: Adapter, ViewHolder, DiffUtil, LayoutManager",
+    "Jetpack ViewModel, LiveData, StateFlow, WorkManager",
+    "Dagger/Hilt dependency injection annotations",
+    "OkHttp Interceptor, Retrofit with Coroutines/Flow",
+    "RxJava operators: map, flatMap, zip, merge, concat",
+    "Jetpack Compose: Composable, State, remember, recomposition",
+    "Java concurrency: synchronized, volatile, ThreadPoolExecutor"
+  ]
+}

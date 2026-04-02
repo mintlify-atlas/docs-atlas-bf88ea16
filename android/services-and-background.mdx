@@ -1,0 +1,554 @@
+---
+title: "Services and Background Work"
+description: "Interview questions on Android Services, WorkManager, BroadcastReceiver, ContentProvider, and background processing."
+keywords: ["android", "Service", "IntentService", "ForegroundService", "WorkManager", "JobScheduler", "BroadcastReceiver", "PendingIntent", "ContentProvider", "AIDL", "ANR", "Looper", "Handler", "HandlerThread"]
+---
+
+Background processing is one of the most nuanced areas of Android development. The platform has strict rules about what apps can do in the background to preserve battery life and memory. This page covers Services, background work APIs, and inter-component communication.
+
+## Services
+
+<AccordionGroup>
+  <Accordion title="What is a Service? What is its lifecycle?">
+    A `Service` is an application component that performs long-running operations in the **background without a user interface**. It runs in the app's main process on the main thread by default.
+
+    **Service lifecycle:**
+
+    ```
+    startService() / bindService()
+           |
+        onCreate()          ← called once when Service is first created
+           |
+        onStartCommand()    ← called each time startService() is called
+           |              (not called for bound-only services)
+    [Service running]
+           |
+        onBind()            ← called when a client calls bindService()
+        onUnbind()          ← called when all clients have unbound
+        onRebind()          ← called if new clients bind after onUnbind()
+           |
+        onDestroy()         ← Service is being destroyed, release resources
+    ```
+
+    **Two types of Services:**
+
+    **Started Service** — launched via `startService()`. Runs until `stopSelf()` is called or another component calls `stopService()`. Returns a value from `onStartCommand()` to control restart behavior:
+    - `START_STICKY` — restart after being killed, with a null Intent
+    - `START_NOT_STICKY` — do not restart unless there are pending Intents
+    - `START_REDELIVER_INTENT` — restart and redeliver the last Intent
+
+    **Bound Service** — launched via `bindService()`. Runs as long as at least one component is bound. Provides a client-server interface via `IBinder`.
+  </Accordion>
+
+  <Accordion title="On which thread does a Service run?">
+    A `Service` runs on the **application's main thread (UI thread)** by default. It does not automatically create a new thread.
+
+    This means that long-running or blocking operations (network requests, file I/O, database queries) inside a `Service` will block the UI thread and trigger an **ANR (Application Not Responding)** if they take more than 5 seconds.
+
+    ```kotlin
+    class DownloadService : Service() {
+        private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+
+        override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+            serviceScope.launch {
+                // Perform work on IO dispatcher, not the main thread
+                downloadFile(intent?.getStringExtra("url"))
+                stopSelf(startId)
+            }
+            return START_NOT_STICKY
+        }
+
+        override fun onDestroy() {
+            super.onDestroy()
+            serviceScope.cancel()
+        }
+
+        override fun onBind(intent: Intent?): IBinder? = null
+    }
+    ```
+
+    <Warning>
+      Always offload work to a background thread (coroutines, `ExecutorService`, `HandlerThread`) inside a Service. The Service itself is just a component entry point, not a thread.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="What is the difference between Service and IntentService?">
+    | Aspect | Service | IntentService |
+    |---|---|---|
+    | Thread | Runs on main thread | Runs on a worker thread |
+    | Concurrency | Must manage threads manually | Handles one request at a time (sequential) |
+    | Stop behavior | Must call `stopSelf()` explicitly | Stops automatically when work is done |
+    | Deprecated | No | Yes (API 30+) |
+
+    `IntentService` was a convenience class that created a worker thread internally and processed each `Intent` sequentially in `onHandleIntent()`. Once all Intents were handled, it stopped itself.
+
+    ```kotlin
+    // Old IntentService approach (deprecated)
+    class OldSyncService : IntentService("OldSyncService") {
+        override fun onHandleIntent(intent: Intent?) {
+            // Runs on a worker thread automatically
+            performSync()
+        }
+    }
+    ```
+
+    **Modern replacement:** Use `WorkManager` for deferrable background work. For immediate background work, use a coroutine-based `Service` or a `ForegroundService`.
+  </Accordion>
+
+  <Accordion title="What is a Foreground Service?">
+    A **Foreground Service** is a Service that performs an operation the user is actively aware of. It must display a persistent notification while running, which informs the user that work is in progress.
+
+    Foreground Services have a higher priority than background Services — the system avoids killing them under memory pressure.
+
+    **When to use:** Music playback, navigation, ongoing file downloads, fitness tracking, VOIP calls.
+
+    ```kotlin
+    class MusicPlayerService : Service() {
+
+        override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+            val notification = createNotification()
+            startForeground(NOTIFICATION_ID, notification)
+
+            // Start playing music...
+            return START_STICKY
+        }
+
+        private fun createNotification(): Notification {
+            val channel = NotificationChannel(
+                "music_channel", "Music Playback",
+                NotificationManager.IMPORTANCE_LOW
+            )
+            getSystemService(NotificationManager::class.java)
+                .createNotificationChannel(channel)
+
+            return NotificationCompat.Builder(this, "music_channel")
+                .setContentTitle("Now Playing")
+                .setContentText("Song Title")
+                .setSmallIcon(R.drawable.ic_music)
+                .build()
+        }
+
+        override fun onBind(intent: Intent?): IBinder? = null
+    }
+    ```
+
+    Declare the permission in the manifest:
+    ```xml
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    ```
+
+    <Note>
+      On Android 14+, Foreground Services require declaring a `foregroundServiceType` (e.g., `mediaPlayback`, `location`, `dataSync`) in both the manifest and when calling `startForeground()`.
+    </Note>
+  </Accordion>
+
+  <Accordion title="What is JobScheduler?">
+    `JobScheduler` is a system service introduced in API 21 that schedules background jobs subject to conditions you define (network type, charging state, idle state, etc.). The system batches jobs from multiple apps and executes them together to reduce battery impact.
+
+    ```kotlin
+    val jobScheduler = getSystemService(JobScheduler::class.java)
+
+    val jobInfo = JobInfo.Builder(JOB_ID, ComponentName(this, SyncJobService::class.java))
+        .setRequiredNetworkType(JobInfo.NETWORK_TYPE_UNMETERED) // WiFi only
+        .setRequiresCharging(true)
+        .setPeriodic(24 * 60 * 60 * 1000L) // once per day
+        .build()
+
+    jobScheduler.schedule(jobInfo)
+    ```
+
+    <Note>
+      `WorkManager` is the recommended replacement for `JobScheduler` for most use cases. `WorkManager` uses `JobScheduler` internally on API 23+ and falls back gracefully on older devices.
+    </Note>
+  </Accordion>
+</AccordionGroup>
+
+## WorkManager
+
+<AccordionGroup>
+  <Accordion title="What is WorkManager and when should you use it?">
+    `WorkManager` is the Jetpack API for scheduling **deferrable, guaranteed background work** — work that must be executed even if the app exits or the device restarts.
+
+    **Use cases:**
+    - Syncing data to a server
+    - Processing images (compress, upload)
+    - Sending analytics batches
+    - Periodic cache cleanup
+
+    **Not suitable for:** Work that must run at a precise time, or work that requires the app to be in the foreground. Use `AlarmManager` for exact timing, `ForegroundService` for immediate user-visible work.
+
+    ```kotlin
+    // Define the work
+    class SyncWorker(context: Context, params: WorkerParameters) :
+        CoroutineWorker(context, params) {
+
+        override suspend fun doWork(): Result {
+            return try {
+                syncDataWithServer()
+                Result.success()
+            } catch (e: Exception) {
+                if (runAttemptCount < 3) Result.retry()
+                else Result.failure()
+            }
+        }
+    }
+
+    // Schedule with constraints
+    val constraints = Constraints.Builder()
+        .setRequiredNetworkType(NetworkType.CONNECTED)
+        .setRequiresBatteryNotLow(true)
+        .build()
+
+    val syncRequest = OneTimeWorkRequestBuilder<SyncWorker>()
+        .setConstraints(constraints)
+        .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 15, TimeUnit.MINUTES)
+        .build()
+
+    WorkManager.getInstance(context).enqueue(syncRequest)
+    ```
+  </Accordion>
+
+  <Accordion title="How does WorkManager guarantee task execution?">
+    `WorkManager` guarantees execution through a combination of mechanisms:
+
+    1. **Persistent storage** — WorkManager stores all work requests in a Room database. If the app process dies, the work requests survive.
+
+    2. **Boot completion** — WorkManager registers a `BroadcastReceiver` for `BOOT_COMPLETED`. After a device restart, it re-enqueues any pending work.
+
+    3. **Platform API selection** — WorkManager automatically selects the best available scheduling API:
+       - API 23+: `JobScheduler`
+       - API < 23: A combination of `AlarmManager` and `BroadcastReceiver`
+
+    4. **Constraint enforcement** — Work only runs when all constraints are satisfied. If a constraint is no longer met, work is paused and resumed when constraints are satisfied again.
+
+    5. **Retry with backoff** — Failed work is automatically retried with configurable linear or exponential backoff.
+  </Accordion>
+
+  <Accordion title="What is the minimum repeat interval for PeriodicWorkRequest?">
+    The minimum repeat interval for a `PeriodicWorkRequest` is **15 minutes**.
+
+    This limit is enforced by the OS to prevent abuse and excessive battery drain. The actual execution time may vary beyond the interval because the system batches work for efficiency.
+
+    ```kotlin
+    val periodicWork = PeriodicWorkRequestBuilder<SyncWorker>(
+        15, TimeUnit.MINUTES  // minimum allowed interval
+    )
+        .setConstraints(constraints)
+        .build()
+
+    WorkManager.getInstance(context).enqueueUniquePeriodicWork(
+        "periodic_sync",
+        ExistingPeriodicWorkPolicy.KEEP,
+        periodicWork
+    )
+    ```
+
+    <Note>
+      Even with a 15-minute interval, `WorkManager` does not guarantee execution at exactly that interval. Doze mode, app standby, and constraint requirements can delay execution. Do not use it for time-critical work.
+    </Note>
+  </Accordion>
+</AccordionGroup>
+
+## Threading and responsiveness
+
+<AccordionGroup>
+  <Accordion title="What is ANR? How can you prevent it?">
+    **ANR (Application Not Responding)** is an error triggered by the Android system when the app's main thread is blocked for too long:
+    - **Activity / Service:** main thread blocked for > 5 seconds
+    - **BroadcastReceiver:** `onReceive()` not completing within 10 seconds
+
+    When an ANR occurs, the system shows a dialog offering the user the option to wait or force-close the app.
+
+    **Prevention strategies:**
+    - **Never perform I/O, network, or database operations on the main thread** — use coroutines with `Dispatchers.IO`, `ExecutorService`, or `WorkManager`
+    - **Move heavy computation to background threads**
+    - Use `StrictMode` in debug builds to detect accidental main-thread disk/network access
+    - Use Android Profiler to identify slow main-thread operations
+
+    ```kotlin
+    // StrictMode in debug builds
+    if (BuildConfig.DEBUG) {
+        StrictMode.setThreadPolicy(
+            StrictMode.ThreadPolicy.Builder()
+                .detectDiskReads()
+                .detectNetwork()
+                .penaltyLog()
+                .build()
+        )
+    }
+
+    // Correct: move work off main thread with coroutines
+    viewModelScope.launch(Dispatchers.IO) {
+        val result = repository.fetchData()  // safe: runs on IO thread
+        withContext(Dispatchers.Main) {
+            updateUI(result)
+        }
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="How do Looper, Handler, and HandlerThread work together?">
+    These three classes form Android's core message-passing mechanism for thread communication.
+
+    **`Looper`** — each thread that wants to process messages needs a `Looper`. It runs an infinite loop, dequeuing messages from a `MessageQueue` and dispatching them one at a time. The main thread has a `Looper` by default (`Looper.getMainLooper()`).
+
+    **`Handler`** — sends and processes `Message`s and `Runnable`s on the thread associated with a specific `Looper`. A `Handler` created on thread A but referencing thread B's `Looper` posts work to thread B.
+
+    **`HandlerThread`** — a convenience class that creates a background thread with its own `Looper`, ready to accept messages.
+
+    ```kotlin
+    // Create a background thread with a Looper
+    val handlerThread = HandlerThread("MyWorkerThread")
+    handlerThread.start()
+
+    // Create a Handler that posts work to that thread
+    val backgroundHandler = Handler(handlerThread.looper) { message ->
+        // This runs on the HandlerThread, not the main thread
+        processMessage(message)
+        true
+    }
+
+    // Post work to the background thread from the main thread
+    backgroundHandler.post {
+        val result = heavyComputation()
+        // Post result back to main thread
+        Handler(Looper.getMainLooper()).post {
+            updateUI(result)
+        }
+    }
+
+    // Clean up
+    handlerThread.quitSafely()
+    ```
+
+    In modern Android development, Kotlin coroutines have largely replaced manual `Handler`/`Looper` usage — but `Handler` is still used internally by many Android APIs.
+  </Accordion>
+</AccordionGroup>
+
+## Intents and BroadcastReceiver
+
+<AccordionGroup>
+  <Accordion title="What is a BroadcastReceiver? What types of broadcasts are there?">
+    A `BroadcastReceiver` is a component that responds to broadcast messages from the Android system or other apps. It allows components to communicate across apps without direct coupling.
+
+    ```kotlin
+    class BatteryReceiver : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            when (intent.action) {
+                Intent.ACTION_BATTERY_LOW -> showLowBatteryWarning()
+                Intent.ACTION_POWER_CONNECTED -> onChargingStarted()
+            }
+        }
+    }
+
+    // Register dynamically (in code)
+    val filter = IntentFilter().apply {
+        addAction(Intent.ACTION_BATTERY_LOW)
+        addAction(Intent.ACTION_POWER_CONNECTED)
+    }
+    registerReceiver(batteryReceiver, filter)
+
+    // Remember to unregister
+    unregisterReceiver(batteryReceiver)
+    ```
+
+    **Types of broadcasts:**
+    - **Normal broadcasts** (`sendBroadcast()`) — delivered to all receivers in undefined order simultaneously
+    - **Ordered broadcasts** (`sendOrderedBroadcast()`) — delivered to receivers one at a time in priority order; each receiver can abort the broadcast
+    - **Sticky broadcasts** — persist after the broadcast ends (deprecated in API 21)
+    - **Local broadcasts** — within the same app process using `LocalBroadcastManager` (deprecated; prefer LiveData or Flow)
+
+    **Implicit vs explicit broadcasts:** System broadcasts (battery, connectivity, boot) are implicit. Starting from Android 8.0, most implicit broadcasts cannot be received by manifest-registered receivers — use dynamic registration in a running component instead.
+  </Accordion>
+
+  <Accordion title="What is the difference between Implicit and Explicit Intents?">
+    **Explicit Intent** — specifies the exact component (class name) to start. Used within the same app.
+
+    ```kotlin
+    // Explicit — start a specific Activity
+    val intent = Intent(this, DetailActivity::class.java)
+    intent.putExtra("item_id", itemId)
+    startActivity(intent)
+
+    // Explicit — start a specific Service
+    val serviceIntent = Intent(this, DownloadService::class.java)
+    startService(serviceIntent)
+    ```
+
+    **Implicit Intent** — does not specify the exact component. Describes an action to perform. The system finds an app that can handle the action (via `IntentFilter` matching).
+
+    ```kotlin
+    // Implicit — open a URL in any browser
+    val webIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://example.com"))
+    startActivity(webIntent)
+
+    // Implicit — share text with any app that can handle it
+    val shareIntent = Intent(Intent.ACTION_SEND).apply {
+        type = "text/plain"
+        putExtra(Intent.EXTRA_TEXT, "Check this out!")
+    }
+    startActivity(Intent.createChooser(shareIntent, "Share via"))
+    ```
+
+    <Warning>
+      On Android 11+ (API 30), you must declare `<queries>` in `AndroidManifest.xml` to query which apps can handle a given implicit Intent. Without it, `PackageManager.queryIntentActivities()` returns an empty list.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="What is PendingIntent?">
+    A `PendingIntent` is a token that grants another application (or the system) permission to perform an Intent operation **on behalf of your app, at a future point in time**. The receiving app uses the PendingIntent to fire the Intent as if it were your app.
+
+    ```kotlin
+    // PendingIntent for a notification tap — opens MainActivity
+    val tapIntent = Intent(context, MainActivity::class.java)
+    val pendingIntent = PendingIntent.getActivity(
+        context,
+        REQUEST_CODE,
+        tapIntent,
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+    )
+
+    val notification = NotificationCompat.Builder(context, CHANNEL_ID)
+        .setContentTitle("Download complete")
+        .setContentIntent(pendingIntent)  // fires when user taps
+        .setAutoCancel(true)
+        .build()
+    ```
+
+    **Common use cases:**
+    - Notification actions and tap handlers
+    - `AlarmManager` — fire an Intent at a specific time
+    - `WorkManager` — custom notification actions from workers
+    - Widgets — respond to button presses
+
+    **Flags:** `FLAG_IMMUTABLE` (required on API 31+ for most PendingIntents), `FLAG_MUTABLE` (needed for PendingIntents used by inline reply notifications), `FLAG_UPDATE_CURRENT`, `FLAG_CANCEL_CURRENT`.
+  </Accordion>
+</AccordionGroup>
+
+## ContentProvider and IPC
+
+<AccordionGroup>
+  <Accordion title="What is a ContentProvider and when is it used?">
+    A `ContentProvider` manages access to a structured set of data and provides a standard interface for other apps (or components) to read and modify that data via a content URI. It is the standard Android mechanism for sharing data between apps.
+
+    ```kotlin
+    class NotesProvider : ContentProvider() {
+
+        override fun onCreate(): Boolean {
+            // Initialize database
+            return true
+        }
+
+        override fun query(
+            uri: Uri, projection: Array<String>?,
+            selection: String?, selectionArgs: Array<String>?,
+            sortOrder: String?
+        ): Cursor? {
+            // Return query result from database
+            return database.query("notes", projection, selection, selectionArgs, null, null, sortOrder)
+        }
+
+        override fun insert(uri: Uri, values: ContentValues?): Uri? {
+            val id = database.insert("notes", null, values)
+            context?.contentResolver?.notifyChange(uri, null)
+            return ContentUris.withAppendedId(NOTES_URI, id)
+        }
+
+        override fun getType(uri: Uri): String = "vnd.android.cursor.dir/notes"
+        override fun delete(uri: Uri, s: String?, args: Array<String>?) = 0
+        override fun update(uri: Uri, v: ContentValues?, s: String?, args: Array<String>?) = 0
+    }
+    ```
+
+    **Typical use cases:**
+    - Sharing contacts data (`ContactsContract`)
+    - Sharing media files (`MediaStore`)
+    - Sharing app data with other apps or widgets
+    - `FileProvider` — secure file sharing using content URIs (required for sharing files with other apps on API 24+)
+  </Accordion>
+
+  <Accordion title="What is AIDL and how do you create a bounded service with it?">
+    **AIDL (Android Interface Definition Language)** allows you to define the programming interface for inter-process communication (IPC) between a client and a Service running in a different process.
+
+    **Steps to create a bounded AIDL service:**
+
+    1. **Define the AIDL interface** — create a `.aidl` file:
+    ```java
+    // ICalculatorService.aidl
+    interface ICalculatorService {
+        int add(int a, int b);
+        int multiply(int a, int b);
+    }
+    ```
+
+    2. **Implement the interface** in the Service:
+    ```kotlin
+    class CalculatorService : Service() {
+        private val binder = object : ICalculatorService.Stub() {
+            override fun add(a: Int, b: Int) = a + b
+            override fun multiply(a: Int, b: Int) = a * b
+        }
+
+        override fun onBind(intent: Intent): IBinder = binder
+    }
+    ```
+
+    3. **Connect from the client**:
+    ```kotlin
+    private var calculatorService: ICalculatorService? = null
+
+    private val connection = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName, service: IBinder) {
+            calculatorService = ICalculatorService.Stub.asInterface(service)
+        }
+        override fun onServiceDisconnected(name: ComponentName) {
+            calculatorService = null
+        }
+    }
+
+    bindService(Intent(this, CalculatorService::class.java), connection, BIND_AUTO_CREATE)
+    ```
+
+    <Note>
+      AIDL is low-level and complex. Prefer Messenger or modern alternatives (ContentProvider, shared databases, broadcast) for simpler IPC needs. AIDL is necessary when you need true multi-threaded cross-process calls.
+    </Note>
+  </Accordion>
+
+  <Accordion title="Can an Android app run in multiple processes?">
+    Yes. By default, all components of an app run in the same process. You can specify `android:process` in the manifest to run a component in a different process.
+
+    ```xml
+    <service
+        android:name=".HeavyService"
+        android:process=":heavy" />
+    <!-- ":heavy" creates a private process named "com.example.app:heavy" -->
+
+    <provider
+        android:name=".DataProvider"
+        android:process="com.example.shared" />
+    <!-- Without ":" prefix — a global process shared with other apps -->
+    ```
+
+    **Why run in multiple processes?**
+    - Isolate a crash-prone component from the main process
+    - Give a component more memory (each process has its own heap)
+    - Isolate a web rendering engine (e.g., WebView in a separate process)
+
+    **Drawbacks:** Objects cannot be shared directly between processes. All cross-process communication must go through IPC mechanisms (AIDL, Messenger, ContentProvider, Intents). Each process consumes additional memory.
+  </Accordion>
+
+  <Accordion title="What are the background processing options in Android?">
+    Android provides several APIs for background work, each with different trade-offs:
+
+    | Option | Best for | Guaranteed? | Notes |
+    |---|---|---|---|
+    | **Coroutines** | Short async work within app lifecycle | No | Cancelled when scope is cancelled |
+    | **WorkManager** | Deferrable, guaranteed work | Yes | Persists across restarts |
+    | **ForegroundService** | Long-running user-visible work | Yes | Requires persistent notification |
+    | **JobScheduler** | Scheduled work with conditions (API 23+) | Mostly | WorkManager wraps this |
+    | **AlarmManager** | Exact-time triggers | Yes | Limited by Doze/battery restrictions |
+    | **Handler/HandlerThread** | Ordered background tasks, lightweight | No | Runs within the process |
+
+    **General guidance:** Use `WorkManager` for background sync and deferred tasks. Use `ForegroundService` for active, user-visible background operations. Use coroutines for all async UI and in-scope work.
+  </Accordion>
+</AccordionGroup>

@@ -1,0 +1,337 @@
+---
+title: "Networking Libraries"
+description: "Interview questions and answers covering OkHttp, Retrofit, Glide, Fresco, and other Android networking and image loading libraries."
+keywords: ["OkHttp", "Retrofit", "Glide", "Fresco", "interceptor", "coroutines", "multipart", "FlatBuffers", "App Startup"]
+---
+
+## Overview
+
+Networking libraries are fundamental to modern Android development. This section covers the most commonly asked interview questions on OkHttp, Retrofit, image loading libraries, and related tooling.
+
+<AccordionGroup>
+
+  <Accordion title="What is OkHttp?">
+    OkHttp is an HTTP client developed by Square that is used under the hood by Retrofit. It handles connection pooling, GZIP compression, response caching, and retry logic transparently.
+
+    Key features:
+    - **Connection pooling** — reuses sockets to reduce latency.
+    - **GZIP compression** — automatically compresses request bodies and decompresses responses.
+    - **HTTP/2 support** — multiplexes multiple requests over a single connection.
+    - **Response caching** — avoids the network entirely for repeated identical requests.
+    - **Interceptors** — allow you to modify requests/responses or observe traffic.
+
+    ```kotlin
+    val client = OkHttpClient.Builder()
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS)
+        .build()
+    ```
+  </Accordion>
+
+  <Accordion title="How does HTTP caching work with OkHttp interceptors?">
+    OkHttp supports HTTP caching through the `Cache` class combined with the `Cache-Control` header. You configure a disk cache directory and attach it to the client. OkHttp will then serve cached responses when the server's `Cache-Control` headers permit it.
+
+    For offline scenarios, you can use an **interceptor** to override the `Cache-Control` header and force OkHttp to return a cached response regardless of age.
+
+    ```kotlin
+    val cacheSize = 10L * 1024 * 1024 // 10 MB
+    val cache = Cache(context.cacheDir, cacheSize)
+
+    val offlineInterceptor = Interceptor { chain ->
+        var request = chain.request()
+        if (!isNetworkAvailable(context)) {
+            request = request.newBuilder()
+                .header("Cache-Control", "public, only-if-cached, max-stale=${60 * 60 * 24 * 7}")
+                .build()
+        }
+        chain.proceed(request)
+    }
+
+    val onlineInterceptor = Interceptor { chain ->
+        val response = chain.proceed(chain.request())
+        response.newBuilder()
+            .header("Cache-Control", "public, max-age=60")
+            .build()
+    }
+
+    val client = OkHttpClient.Builder()
+        .cache(cache)
+        .addNetworkInterceptor(onlineInterceptor)   // applied when network is available
+        .addInterceptor(offlineInterceptor)          // applied always (app-level)
+        .build()
+    ```
+
+    <Note>
+      `addInterceptor` adds an **application interceptor** that runs once regardless of redirects. `addNetworkInterceptor` adds a **network interceptor** that runs every time a network request is made, including redirects.
+    </Note>
+  </Accordion>
+
+  <Accordion title="How do you enable logging in OkHttp?">
+    Use `HttpLoggingInterceptor` from the `okhttp3-logging-interceptor` artifact. Set the logging level to `BODY` for full request/response details, but restrict it to debug builds only to avoid leaking sensitive data in production.
+
+    ```kotlin
+    val logging = HttpLoggingInterceptor().apply {
+        level = if (BuildConfig.DEBUG) {
+            HttpLoggingInterceptor.Level.BODY
+        } else {
+            HttpLoggingInterceptor.Level.NONE
+        }
+    }
+
+    val client = OkHttpClient.Builder()
+        .addInterceptor(logging)
+        .build()
+    ```
+
+    The four logging levels are:
+    - `NONE` — no logging.
+    - `BASIC` — logs request method, URL, response code and time.
+    - `HEADERS` — logs request and response headers.
+    - `BODY` — logs headers and body content.
+
+    <Warning>
+      Never use `BODY` logging in production. Request/response bodies may contain tokens, passwords, or personally identifiable information.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="What is an OkHttp Interceptor and what are the two types?">
+    An interceptor is a mechanism in OkHttp that lets you observe, modify, and short-circuit requests and responses. They follow the chain-of-responsibility pattern — each interceptor calls `chain.proceed()` to pass the request to the next interceptor in the chain.
+
+    **Application Interceptors** (added via `addInterceptor`):
+    - Invoked once per call, before the network interceptors.
+    - Can short-circuit and return a cached or mock response without hitting the network.
+    - Suitable for authentication headers, logging, retry logic.
+
+    **Network Interceptors** (added via `addNetworkInterceptor`):
+    - Invoked every time a network request is made, including transparent redirects and retries.
+    - Can observe the data exactly as it will be transmitted.
+    - Suitable for cache-control header manipulation, monitoring actual wire traffic.
+
+    ```kotlin
+    val authInterceptor = Interceptor { chain ->
+        val request = chain.request().newBuilder()
+            .addHeader("Authorization", "Bearer ${getToken()}")
+            .build()
+        chain.proceed(request)
+    }
+
+    val client = OkHttpClient.Builder()
+        .addInterceptor(authInterceptor)
+        .build()
+    ```
+  </Accordion>
+
+  <Accordion title="Retrofit vs OkHttp — what is the difference and when to use each?">
+    OkHttp and Retrofit serve different layers of the networking stack and are often used together.
+
+    | Aspect | OkHttp | Retrofit |
+    |--------|--------|----------|
+    | Level | Low-level HTTP client | High-level REST adapter |
+    | API definition | Manual request building | Annotated interface methods |
+    | Response parsing | Raw `ResponseBody` | Automatic via converters (Gson, Moshi, etc.) |
+    | Coroutine support | Not built-in | Native via suspend functions |
+    | Use case | Fine-grained control, WebSockets, custom protocols | Consuming REST/JSON APIs |
+
+    **Use OkHttp directly** when you need raw HTTP access, WebSocket connections, or downloading files with progress callbacks.
+
+    **Use Retrofit** when you are consuming a REST API and want a clean, type-safe interface with automatic serialization.
+
+    In practice, Retrofit uses OkHttp as its underlying HTTP engine, so you configure the `OkHttpClient` (interceptors, timeouts, cache) and pass it to `Retrofit.Builder`.
+
+    ```kotlin
+    val retrofit = Retrofit.Builder()
+        .baseUrl("https://api.example.com/")
+        .client(okHttpClient)           // shared OkHttpClient
+        .addConverterFactory(GsonConverterFactory.create())
+        .build()
+    ```
+  </Accordion>
+
+  <Accordion title="How do you integrate Retrofit with Kotlin Coroutines?">
+    Retrofit has native support for Kotlin coroutines from version 2.6.0 onwards. Declare your API interface methods as `suspend` functions that return the response type directly (or wrapped in `Response<T>` for access to HTTP status codes).
+
+    <CodeGroup>
+
+    ```kotlin Retrofit with Coroutines
+    // API interface
+    interface ApiService {
+        @GET("users/{id}")
+        suspend fun getUser(@Path("id") id: Int): User
+
+        @GET("posts")
+        suspend fun getPosts(): Response<List<Post>>
+    }
+
+    // Repository
+    class UserRepository(private val api: ApiService) {
+        suspend fun fetchUser(id: Int): Result<User> = runCatching {
+            api.getUser(id)
+        }
+    }
+
+    // ViewModel
+    class UserViewModel(private val repository: UserRepository) : ViewModel() {
+        val user = MutableLiveData<User>()
+
+        fun loadUser(id: Int) {
+            viewModelScope.launch {
+                repository.fetchUser(id)
+                    .onSuccess { user.value = it }
+                    .onFailure { /* handle error */ }
+            }
+        }
+    }
+    ```
+
+    ```kotlin Retrofit with Kotlin Flow
+    // API interface — same suspend functions
+    interface ApiService {
+        @GET("users/{id}")
+        suspend fun getUser(@Path("id") id: Int): User
+    }
+
+    // Repository wraps the suspend call in a Flow
+    class UserRepository(private val api: ApiService) {
+        fun fetchUser(id: Int): Flow<User> = flow {
+            emit(api.getUser(id))
+        }.flowOn(Dispatchers.IO)
+    }
+
+    // ViewModel collects the Flow
+    class UserViewModel(private val repository: UserRepository) : ViewModel() {
+        val user: StateFlow<User?> = repository.fetchUser(1)
+            .stateIn(
+                scope = viewModelScope,
+                started = SharingStarted.WhileSubscribed(5_000),
+                initialValue = null
+            )
+    }
+    ```
+
+    </CodeGroup>
+
+    <Tip>
+      Retrofit with coroutines handles threading automatically on the OkHttp dispatcher. You do not need to switch dispatchers manually for network calls — Retrofit suspends the coroutine without blocking the thread.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="What is a Multipart request in networking?">
+    A multipart request allows you to send multiple pieces of data (files, form fields) in a single HTTP request using `multipart/form-data` encoding. Each piece is a separate "part" with its own headers and body, delimited by a boundary string.
+
+    This is the standard way to upload files alongside metadata.
+
+    ```kotlin
+    interface ApiService {
+        @Multipart
+        @POST("upload")
+        suspend fun uploadFile(
+            @Part("description") description: RequestBody,
+            @Part file: MultipartBody.Part
+        ): UploadResponse
+    }
+
+    // Usage
+    fun createFilePart(uri: Uri, context: Context): MultipartBody.Part {
+        val file = File(uri.path!!)
+        val requestBody = file.asRequestBody("image/*".toMediaTypeOrNull())
+        return MultipartBody.Part.createFormData("file", file.name, requestBody)
+    }
+
+    val description = "My photo".toRequestBody("text/plain".toMediaTypeOrNull())
+    val filePart = createFilePart(selectedUri, context)
+    val response = apiService.uploadFile(description, filePart)
+    ```
+  </Accordion>
+
+  <Accordion title="How do image loading libraries like Glide and Fresco work?">
+    Both Glide and Fresco follow a similar pipeline to efficiently load, cache, and display images:
+
+    1. **Key generation** — a unique cache key is derived from the URL (plus transformations, size, etc.).
+    2. **Memory cache lookup** — check if the decoded bitmap is already in an in-memory LRU cache.
+    3. **Disk cache lookup** — if not in memory, check the disk cache for the encoded or decoded image.
+    4. **Network fetch** — if not cached, download the image bytes from the network.
+    5. **Decode and transform** — decode the byte stream into a `Bitmap`, apply transformations (resize, crop, etc.).
+    6. **Display** — show the bitmap in the target `ImageView`.
+
+    **Bitmap Pool**: Both libraries maintain a pool of reusable `Bitmap` objects. Instead of allocating a new bitmap on every load (which triggers GC pressure), they reconfigure an existing same-size bitmap from the pool. Glide's `BitmapPool` uses an LRU strategy based on total byte size.
+
+    **Memory optimization strategies**:
+    - Downsampling to the exact target view dimensions before decoding.
+    - Using RGB_565 format instead of ARGB_8888 for images that don't need transparency (halves memory).
+    - Releasing bitmaps back to the pool when the view is detached.
+
+    ```kotlin
+    // Glide example
+    Glide.with(context)
+        .load(imageUrl)
+        .placeholder(R.drawable.placeholder)
+        .error(R.drawable.error)
+        .diskCacheStrategy(DiskCacheStrategy.ALL)
+        .into(imageView)
+    ```
+
+    **Fresco** differs by storing decoded bitmaps in `ashmem` (anonymous shared memory) on older Android versions, which keeps them outside the Java heap and reduces GC pauses for large images.
+  </Accordion>
+
+  <Accordion title="What is the App Startup Library?">
+    The **Jetpack App Startup** library provides a simple, performant way to initialize components during app launch. Without it, every library that needs to run code at startup registers its own `ContentProvider`, which is slow because each provider adds overhead to the startup sequence.
+
+    App Startup consolidates all initializers into a single `ContentProvider` (`InitializationProvider`), reducing startup time.
+
+    ```kotlin
+    // Define an initializer
+    class TimberInitializer : Initializer<Unit> {
+        override fun create(context: Context) {
+            if (BuildConfig.DEBUG) {
+                Timber.plant(Timber.DebugTree())
+            }
+        }
+
+        // No dependencies on other initializers
+        override fun dependencies(): List<Class<out Initializer<*>>> = emptyList()
+    }
+    ```
+
+    Register it in `AndroidManifest.xml`:
+
+    ```xml
+    <provider
+        android:name="androidx.startup.InitializationProvider"
+        android:authorities="${applicationId}.androidx-startup"
+        android:exported="false"
+        tools:node="merge">
+        <meta-data
+            android:name="com.example.TimberInitializer"
+            android:value="androidx.startup" />
+    </provider>
+    ```
+
+    <Tip>
+      Use App Startup for any library that previously required its own `ContentProvider` for initialization (WorkManager, Lifecycle, etc.). It is especially impactful when you have many such libraries.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="FlatBuffers vs JSON — what is the difference?">
+    Both are data serialization formats, but they have fundamentally different performance characteristics.
+
+    | Aspect | JSON | FlatBuffers |
+    |--------|------|-------------|
+    | Format | Text | Binary |
+    | Parsing | Required — full parse into object graph | Zero-copy — access fields directly from buffer |
+    | Memory | Allocates many objects during parsing | No parsing allocations |
+    | Human-readable | Yes | No (requires schema and generated code) |
+    | Schema required | No | Yes (`.fbs` schema file) |
+    | Backward compatibility | Easy | Supported via field IDs |
+    | Use case | REST APIs, config | Performance-critical paths, games, large datasets |
+
+    **FlatBuffers** were developed by Google for use in games where parsing latency and allocation overhead matter. You access fields via generated accessor methods that read directly from the byte buffer without allocating intermediate objects.
+
+    In Android, FlatBuffers are useful for:
+    - Local database or file storage of large structured data.
+    - Passing large data between processes via shared memory.
+    - Scenarios where JSON parsing latency is measurable in profiling.
+
+    For typical REST API communication, JSON with a fast parser (Moshi, kotlinx.serialization) is sufficient and much simpler to work with.
+  </Accordion>
+
+</AccordionGroup>

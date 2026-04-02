@@ -1,0 +1,259 @@
+---
+title: "Performance and Memory"
+description: "Interview questions on Android app performance, memory optimization, battery life, and common pitfalls to avoid."
+---
+
+<AccordionGroup>
+
+<Accordion title="Why does an Android app lag?">
+App lag occurs when the main (UI) thread is blocked for more than 16ms per frame (targeting 60 fps). Common causes:
+
+- **Heavy work on the main thread** — network calls, file I/O, large computations
+- **Excessive garbage collection** — frequent GC pauses cause frame drops
+- **Overdraw** — drawing the same pixel multiple times per frame
+- **Layout complexity** — deeply nested view hierarchies slow measure/layout passes
+- **Memory pressure** — when the system is low on memory, GC runs more aggressively
+
+Move expensive work off the main thread using Coroutines, WorkManager, or thread pools.
+
+```kotlin
+// Bad: blocking main thread
+val data = networkCall() // blocks UI
+
+// Good: coroutine on IO dispatcher
+viewModelScope.launch {
+    val data = withContext(Dispatchers.IO) { networkCall() }
+    _uiState.value = data
+}
+```
+</Accordion>
+
+<Accordion title="What is onTrimMemory() and when is it called?">
+`onTrimMemory()` is called by the system when it needs memory back. It is called on your `Application`, `Activity`, `Fragment`, and `Service`.
+
+Key levels:
+- `TRIM_MEMORY_UI_HIDDEN` — your app's UI is no longer visible; release UI caches
+- `TRIM_MEMORY_RUNNING_LOW` — system is running low on memory
+- `TRIM_MEMORY_RUNNING_CRITICAL` — critical memory situation
+- `TRIM_MEMORY_BACKGROUND` — process is in the LRU cache
+- `TRIM_MEMORY_MODERATE` — process is in the middle of the LRU cache
+- `TRIM_MEMORY_COMPLETE` — process is near the end of LRU; release everything non-essential
+
+```kotlin
+override fun onTrimMemory(level: Int) {
+    super.onTrimMemory(level)
+    if (level >= ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN) {
+        // Release image caches, etc.
+        imageCache.clear()
+    }
+}
+```
+</Accordion>
+
+<Accordion title="What is the difference between a Memory Leak and an OutOfMemory Error?">
+- **Memory Leak**: An object is no longer needed but is still referenced, preventing the GC from reclaiming it. Over time, leaks accumulate and can eventually cause an OOM.
+- **OutOfMemory (OOM) Error**: The JVM cannot allocate memory for a new object because the heap is exhausted. The app crashes with `java.lang.OutOfMemoryError`.
+
+A memory leak is the cause; OOM is often the symptom.
+</Accordion>
+
+<Accordion title="How do you find memory leaks in Android?">
+1. **LeakCanary** — Add the library to your debug dependencies. It automatically detects retained objects after they should have been GC'd and shows a human-readable leak trace.
+2. **Android Studio Memory Profiler** — Record allocations, take heap dumps, inspect retained objects and their reference chains.
+3. **Heap Dumps** — Capture and analyze with Android Studio or the `hprof-conv` tool.
+
+```kotlin
+// LeakCanary — no code needed, just add the dependency:
+// debugImplementation 'com.squareup.leakcanary:leakcanary-android:2.x'
+```
+
+<Warning>
+Common memory leak causes: anonymous inner classes and non-static inner classes holding a reference to the outer `Activity`, registering listeners or callbacks and forgetting to unregister, static references to `Context` or `View`.
+</Warning>
+</Accordion>
+
+<Accordion title="How do you identify and fix OutOfMemory issues?">
+1. Use the **Memory Profiler** to monitor heap usage over time and find the moment allocation spikes.
+2. Take a **heap dump** and look for objects with unexpectedly high retained sizes.
+3. Common fixes:
+   - Load scaled-down Bitmaps using `BitmapFactory.Options.inSampleSize`
+   - Use image loading libraries (Glide, Picasso) that handle caching and recycling
+   - Release large objects when not needed
+   - Use `WeakReference` for caches where eviction is acceptable
+</Accordion>
+
+<Accordion title="How do you handle Bitmaps efficiently in Android?">
+Loading full-resolution bitmaps into memory is a common cause of OOM. Best practices:
+
+- **Decode a scaled-down version** using `inSampleSize` in `BitmapFactory.Options`
+- **Use `inBitmap`** to reuse an existing bitmap's memory allocation
+- **Use Glide or Picasso** — they handle all of this automatically including disk/memory caching
+
+```kotlin
+fun decodeSampledBitmap(res: Resources, resId: Int, reqWidth: Int, reqHeight: Int): Bitmap {
+    val options = BitmapFactory.Options().apply {
+        inJustDecodeBounds = true
+        BitmapFactory.decodeResource(res, resId, this)
+        inSampleSize = calculateInSampleSize(this, reqWidth, reqHeight)
+        inJustDecodeBounds = false
+    }
+    return BitmapFactory.decodeResource(res, resId, options)
+}
+```
+</Accordion>
+
+<Accordion title="What is a Bitmap pool and how does it help?">
+A Bitmap pool is a cache of already-allocated `Bitmap` objects. Instead of allocating new memory for every bitmap, you reuse memory from the pool — reducing GC pressure.
+
+Glide uses a `BitmapPool` internally. When it's done with a bitmap, it puts it back in the pool. The next time a bitmap of the same size/config is needed, the pooled one is reused via `BitmapFactory.Options.inBitmap`.
+
+This avoids frequent heap allocations and keeps scrolling smooth.
+</Accordion>
+
+<Accordion title="What are ThreadPool advantages over creating raw threads?">
+Creating a new `Thread` for every task is expensive — thread creation has overhead and unbounded threads can exhaust system resources.
+
+A `ThreadPoolExecutor` provides:
+- **Thread reuse** — threads are kept alive and reused for new tasks
+- **Bounded concurrency** — `corePoolSize` and `maximumPoolSize` cap the number of threads
+- **Work queuing** — excess tasks are queued rather than spawned as threads
+- **Lifecycle management** — idle threads are terminated after `keepAliveTime`
+
+```kotlin
+val executor = ThreadPoolExecutor(
+    2,                        // corePoolSize
+    4,                        // maximumPoolSize
+    60L, TimeUnit.SECONDS,    // keepAliveTime
+    LinkedBlockingQueue()     // work queue
+)
+```
+</Accordion>
+
+<Accordion title="What is the difference between Daemon Threads and User Threads?">
+- **User Threads**: Normal threads. The JVM waits for all user threads to finish before shutting down.
+- **Daemon Threads**: Background threads. The JVM does not wait for them; they are terminated when all user threads finish. Use daemon threads for background tasks that should not block app shutdown.
+
+```java
+Thread t = new Thread(runnable);
+t.setDaemon(true); // mark as daemon before starting
+t.start();
+```
+</Accordion>
+
+<Accordion title="What is the difference between Runnable and Thread?">
+- **`Thread`** is a class representing an OS thread. Extending it couples your task to a specific thread.
+- **`Runnable`** is a functional interface representing a unit of work. It separates the task from the thread that executes it.
+
+Prefer `Runnable` (or `Callable`) because it allows you to submit the task to an `Executor`, `ThreadPool`, or `Coroutine` without creating a dedicated thread.
+</Accordion>
+
+<Accordion title="Can you manually call the Garbage Collector?">
+You can call `System.gc()`, but it is only a **hint** to the JVM — it does not guarantee immediate garbage collection. The Android runtime decides when GC actually runs based on heap pressure.
+
+In practice, you should never need to call `System.gc()`. Focus on releasing object references (setting them to `null` or using `WeakReference`) instead.
+</Accordion>
+
+<Accordion title="What is overdraw and how do you reduce it?">
+Overdraw occurs when the GPU renders the same pixel more than once in a single frame. For example, a red background drawn behind a blue button means the red pixels under the button are drawn but never visible.
+
+To debug: **Developer Options → Debug GPU Overdraw** shows a color overlay (blue = 1x, green = 2x, pink = 3x, red = 4x+).
+
+To reduce overdraw:
+- Remove unnecessary background drawables on layouts
+- Use `clipRect()` in custom views to restrict drawing area
+- Flatten view hierarchies with `ConstraintLayout`
+- Avoid transparent backgrounds where possible
+</Accordion>
+
+<Accordion title="How do you reduce battery usage in an Android app?">
+- **Batch network requests** — avoid frequent small requests
+- **Use WorkManager** for deferrable background work — it respects Doze and App Standby
+- **Avoid wake locks** unless absolutely necessary
+- **Use JobScheduler / WorkManager** instead of polling
+- **Reduce GPS/sensor usage** — unregister listeners when not needed
+- **Use FCM push** instead of polling for updates
+- **Minimize wake-ups** — coalesce alarms with `AlarmManager.setInexactRepeating`
+</Accordion>
+
+<Accordion title="What is Doze mode and App Standby?">
+**Doze mode**: When the device is stationary, unplugged, and the screen is off for a period, Android restricts network access, wafers alarms, jobs, and syncs to maintenance windows. Apps must use FCM high-priority messages for time-critical notifications.
+
+**App Standby**: If the user hasn't interacted with an app recently, the system puts it in a standby bucket, restricting its background jobs and network access.
+
+WorkManager handles both transparently — it schedules work that runs during Doze maintenance windows.
+</Accordion>
+
+<Accordion title="How does Android implement Adaptive Battery using ML?">
+Android uses an on-device machine learning model to predict which apps the user is likely to use in the next few hours. Apps not predicted to be used are placed in restricted standby buckets (Rare, Never), severely limiting their background activity. This reduces unnecessary wake-ups and extends battery life without the user having to manually manage apps.
+</Accordion>
+
+<Accordion title="What is RecyclerView scrolling performance optimization?">
+Key optimizations:
+- **Use `DiffUtil`** instead of `notifyDataSetChanged()` for granular updates
+- **`setHasFixedSize(true)`** — if the RecyclerView's size doesn't change when the adapter content changes, this avoids re-measuring the entire list
+- **Use `RecyclerView.RecycledViewPool`** for nested RecyclerViews
+- **Avoid heavy work in `onBindViewHolder`** — precompute data before binding
+- **Use `Glide`/`Coil`** for image loading with proper placeholder and caching
+- **Use `ViewHolder` pattern** (built into RecyclerView) — always reuse views
+
+```kotlin
+recyclerView.setHasFixedSize(true)
+recyclerView.setItemViewCacheSize(20)
+```
+</Accordion>
+
+<Accordion title="How do you optimize Nested RecyclerView with setRecycledViewPool?">
+When a `RecyclerView` is inside each row of an outer `RecyclerView`, each inner list creates its own `RecycledViewPool`. This means views are not shared between rows.
+
+By sharing a single `RecycledViewPool` across all inner RecyclerViews, views scrolled off screen in one inner list can be reused by another inner list — reducing inflation overhead.
+
+```kotlin
+val sharedPool = RecyclerView.RecycledViewPool()
+
+// Set in each inner RecyclerView
+innerRecyclerView.setRecycledViewPool(sharedPool)
+```
+</Accordion>
+
+<Accordion title="What is the difference between HashMap, ArrayMap, and SparseArray?">
+| | HashMap | ArrayMap | SparseArray |
+|---|---|---|---|
+| Key type | Any object | Any object | int only |
+| Memory | Higher (Entry objects + array) | Lower (two arrays) | Lower (two arrays) |
+| Performance | O(1) average | O(log n), slower for large maps | O(log n) |
+| Best for | Large maps (1000+ entries) | Small-medium maps (under 1000) | int keys, small-medium maps |
+
+In Android, prefer `ArrayMap` or `SparseArray` for small collections (under ~1000 items) to reduce memory overhead.
+</Accordion>
+
+<Accordion title="What is the difference between Parcelable and Serializable?">
+- **Serializable**: Java standard interface. Uses reflection — slow. Creates many temporary objects, causing GC pressure.
+- **Parcelable**: Android-specific interface. Explicit, hand-written serialization — significantly faster (10x+). No reflection.
+
+Always prefer `Parcelable` in Android for passing data between components.
+
+```kotlin
+@Parcelize
+data class User(val id: Int, val name: String) : Parcelable
+```
+
+<Tip>Use the `@Parcelize` annotation from `kotlin-parcelize` plugin to auto-generate the Parcelable implementation.</Tip>
+</Accordion>
+
+<Accordion title="What is commit() vs apply() in SharedPreferences?">
+- **`commit()`**: Writes synchronously to disk and returns a `Boolean` indicating success or failure. Blocks the calling thread.
+- **`apply()`**: Writes asynchronously to disk. Returns nothing. If a `commit()` is pending when `apply()` is called, the `commit()` blocks until the `apply()` finishes.
+
+Prefer `apply()` unless you need the return value or must guarantee the write is complete before proceeding.
+</Accordion>
+
+<Accordion title="What is Scoped Storage in Android?">
+Introduced in Android 10, Scoped Storage restricts apps from freely reading and writing to shared external storage. Apps can only access:
+- Their own app-specific directory (no permission needed)
+- Media files they created (via `MediaStore`)
+- Files the user explicitly grants access to (via Storage Access Framework)
+
+This protects user privacy and prevents apps from reading arbitrary files on the device.
+</Accordion>
+
+</AccordionGroup>

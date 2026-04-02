@@ -1,0 +1,850 @@
+---
+title: "Jetpack Compose"
+description: "Jetpack Compose interview questions covering declarative UI, state management, side effects, modifiers, navigation, and performance."
+keywords: ["jetpack compose", "composable", "recomposition", "state", "side effects", "LaunchedEffect", "android interview"]
+---
+
+<AccordionGroup>
+
+<Accordion title="What is Jetpack Compose? How does declarative UI differ from imperative UI?">
+
+**Jetpack Compose** is Android's modern, fully declarative UI toolkit. Instead of inflating XML layouts and mutating views imperatively, you describe what the UI should look like for a given state, and Compose handles rendering and updates.
+
+**Imperative UI** (traditional View system):
+- You create and hold references to view objects.
+- When state changes, you manually call methods to update each view (`setText()`, `setVisibility()`, etc.).
+- You are responsible for synchronising UI state with app state.
+
+```java
+// Imperative — manually mutate the view
+TextView label = findViewById(R.id.label);
+label.setText("Hello");
+label.setVisibility(View.VISIBLE);
+button.setOnClickListener(v -> label.setText("Clicked!"));
+```
+
+**Declarative UI** (Compose):
+- You describe the UI as a function of state.
+- When state changes, Compose automatically re-executes (recomposes) the affected functions and updates only what changed.
+
+```kotlin
+// Declarative — UI is a pure function of state
+@Composable
+fun Greeting(name: String) {
+    Text(text = "Hello, $name!")
+}
+```
+
+Compose is:
+- **Concise**: far less boilerplate than XML + Kotlin View code.
+- **Powerful**: full Kotlin language support inside UI definitions.
+- **Extensible**: custom layouts and animations are first-class citizens.
+</Accordion>
+
+<Accordion title="What are Composable functions and what are the rules for writing them?">
+
+A **Composable function** is a regular Kotlin function annotated with `@Composable`. It describes a piece of UI and can call other composable functions.
+
+```kotlin
+@Composable
+fun UserCard(user: User, onClick: () -> Unit) {
+    Card(modifier = Modifier.clickable { onClick() }) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(text = user.name, style = MaterialTheme.typography.titleMedium)
+            Text(text = user.email, style = MaterialTheme.typography.bodySmall)
+        }
+    }
+}
+```
+
+**Rules for composable functions**:
+1. Must be called from another composable function or from a `setContent {}` / `ComposeView` block.
+2. Names should start with an uppercase letter (PascalCase) by convention.
+3. They should be **pure** with respect to their parameters and state — the same inputs should produce the same UI.
+4. They can have side effects only through the designated side-effect APIs (`LaunchedEffect`, `SideEffect`, etc.).
+5. They should not return values (return type is `Unit`).
+6. They may be re-executed (recomposed) at any time; avoid expensive operations directly in the function body.
+</Accordion>
+
+<Accordion title="What is Recomposition and how do you optimise it?">
+
+**Recomposition** is the process of Compose re-executing composable functions when their inputs (state or parameters) change, to update the UI. Only the composables whose inputs have actually changed are re-executed — unchanged parts are **skipped**.
+
+```kotlin
+@Composable
+fun Counter(count: Int, onIncrement: () -> Unit) {
+    // Recomposes only when `count` changes
+    Button(onClick = onIncrement) {
+        Text("Count: $count")
+    }
+}
+```
+
+**Optimisation strategies**:
+
+- **Use stable types**: Compose skips recomposition for composables whose parameters are stable (primitives, `@Stable`/`@Immutable` annotated classes, or data classes with only stable fields).
+- **Hoist state**: lift state up so that only the composable that actually uses a value recomposes.
+- **`key()`**: provide a stable key inside `LazyColumn` items so Compose can track identities across recomposition.
+- **`derivedStateOf`**: compute derived state so recomposition only happens when the derived value changes, not every time the source state changes.
+- **Lambda stability**: pass remembered lambdas to avoid unnecessary recomposition of child composables.
+
+```kotlin
+// Avoid: lambda recreated on every recomposition
+LazyColumn {
+    items(items) { item ->
+        ItemRow(item, onClick = { viewModel.select(item) }) // new lambda each time
+    }
+}
+
+// Better: stable remembered callback
+val onItemClick: (Item) -> Unit = remember { { item -> viewModel.select(item) } }
+```
+</Accordion>
+
+<Accordion title="How does State work in Compose? What is remember and rememberSaveable?">
+
+**State** in Compose is an observable value that, when changed, triggers recomposition of any composable that reads it.
+
+`MutableState<T>` is the primary state holder. Use `mutableStateOf()` to create one.
+
+**`remember`** — stores a value in the composition. The value survives recompositions but is **lost** when the composable leaves the composition (e.g., navigation, configuration change).
+
+**`rememberSaveable`** — like `remember`, but the value is also saved in the saved instance state bundle and **survives configuration changes** (screen rotation) and process death/recreation.
+
+```kotlin
+@Composable
+fun TemperatureConverter() {
+    // Survives recomposition, lost on rotation
+    var celsius by remember { mutableStateOf("") }
+
+    // Survives recomposition AND rotation
+    var fahrenheit by rememberSaveable { mutableStateOf("") }
+
+    Column {
+        TextField(value = celsius, onValueChange = { celsius = it }, label = { Text("Celsius") })
+        TextField(value = fahrenheit, onValueChange = { fahrenheit = it }, label = { Text("Fahrenheit") })
+    }
+}
+```
+
+Use `rememberSaveable` for any state the user would expect to survive a screen rotation (form fields, scroll position, selected tab). Use `remember` for transient UI state (animation states, focus).
+</Accordion>
+
+<Accordion title="What is the difference between Stateful and Stateless composables?">
+
+<Tabs>
+  <Tab title="Stateful composable">
+    Owns and manages its own state internally. It is **self-contained** but harder to test and reuse because its behaviour is hidden.
+
+    ```kotlin
+    @Composable
+    fun StatefulCounter() {
+        var count by remember { mutableStateOf(0) }
+        Button(onClick = { count++ }) {
+            Text("Count: $count")
+        }
+    }
+    ```
+
+    The caller has no control over the count value and cannot react to changes.
+  </Tab>
+  <Tab title="Stateless composable">
+    Receives all state and events as parameters. It is a **pure function of its inputs** — easily testable, reusable, and previewable.
+
+    ```kotlin
+    @Composable
+    fun StatelessCounter(count: Int, onIncrement: () -> Unit) {
+        Button(onClick = onIncrement) {
+            Text("Count: $count")
+        }
+    }
+
+    // Caller controls the state
+    @Composable
+    fun CounterScreen(viewModel: CounterViewModel = viewModel()) {
+        val count by viewModel.count.collectAsState()
+        StatelessCounter(count = count, onIncrement = { viewModel.increment() })
+    }
+    ```
+  </Tab>
+</Tabs>
+
+Prefer stateless composables. Keep stateful composables at the highest level needed and pass state down through parameters.
+</Accordion>
+
+<Accordion title="What is State Hoisting?">
+
+State hoisting is the pattern of **moving state up** to the common ancestor of composables that need to read or modify it. The composable that owns the state passes it down as a parameter and passes event callbacks up.
+
+This creates stateless, reusable composables and a single source of truth.
+
+```kotlin
+// State hoisted to the parent
+@Composable
+fun SearchScreen() {
+    var query by remember { mutableStateOf("") }
+    var results by remember { mutableStateOf(emptyList<String>()) }
+
+    Column {
+        SearchBar(
+            query = query,
+            onQueryChange = { query = it; results = search(it) }
+        )
+        ResultList(results = results)
+    }
+}
+
+// SearchBar is stateless — it only knows about its current value
+@Composable
+fun SearchBar(query: String, onQueryChange: (String) -> Unit) {
+    TextField(value = query, onValueChange = onQueryChange, label = { Text("Search") })
+}
+```
+
+State hoisting makes composables:
+- **Reusable**: can be used in different contexts with different state owners.
+- **Testable**: state is external and controllable in tests.
+- **Single source of truth**: no synchronization issues between multiple copies of state.
+</Accordion>
+
+<Accordion title="What are side effects in Compose? Explain LaunchedEffect, DisposableEffect, and SideEffect.">
+
+A **side effect** is any work that happens outside of the composition itself — launching a coroutine, registering a listener, or triggering a one-time event.
+
+**`LaunchedEffect(key)`** — launches a coroutine in the composition's scope. It re-launches when the `key` changes and cancels the previous coroutine.
+
+```kotlin
+@Composable
+fun SearchResults(query: String) {
+    var results by remember { mutableStateOf(emptyList<String>()) }
+
+    LaunchedEffect(query) { // re-runs whenever `query` changes
+        results = withContext(Dispatchers.IO) { repository.search(query) }
+    }
+
+    LazyColumn { items(results) { Text(it) } }
+}
+```
+
+**`DisposableEffect(key)`** — for side effects that need cleanup when the composable leaves the composition or when the key changes.
+
+```kotlin
+@Composable
+fun LifecycleObserver(lifecycle: Lifecycle) {
+    DisposableEffect(lifecycle) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) { /* ... */ }
+        }
+        lifecycle.addObserver(observer)
+        onDispose { lifecycle.removeObserver(observer) } // cleanup
+    }
+}
+```
+
+**`SideEffect`** — runs after every successful recomposition. Used to synchronise Compose state with non-Compose code (e.g., analytics).
+
+```kotlin
+@Composable
+fun TrackScreen(screenName: String) {
+    SideEffect {
+        analytics.logScreenView(screenName) // runs after each recomposition
+    }
+}
+```
+
+**`rememberCoroutineScope`** — provides a `CoroutineScope` tied to the composition. Use it to launch coroutines in response to user events (outside of `LaunchedEffect`).
+
+```kotlin
+@Composable
+fun SaveButton(data: FormData) {
+    val scope = rememberCoroutineScope()
+    Button(onClick = {
+        scope.launch { repository.save(data) } // launched from event handler
+    }) { Text("Save") }
+}
+```
+</Accordion>
+
+<Accordion title="What is the difference between LaunchedEffect and DisposableEffect?">
+
+| Aspect | LaunchedEffect | DisposableEffect |
+|---|---|---|
+| Purpose | Launch a coroutine | Register/unregister a non-coroutine resource |
+| Cleanup | Coroutine is cancelled when key changes or composable leaves | `onDispose` block is called when key changes or composable leaves |
+| Use case | Network calls, timers, animations | Listeners, callbacks, system services |
+
+```kotlin
+// LaunchedEffect — coroutine is the side effect
+LaunchedEffect(userId) {
+    user = userRepository.getUser(userId)
+}
+
+// DisposableEffect — manage a listener lifecycle
+DisposableEffect(sensor) {
+    sensorManager.registerListener(listener, sensor, SensorManager.SENSOR_DELAY_NORMAL)
+    onDispose {
+        sensorManager.unregisterListener(listener)
+    }
+}
+```
+
+If your side effect produces a result asynchronously, use `LaunchedEffect`. If you are registering something that must be explicitly unregistered, use `DisposableEffect`.
+</Accordion>
+
+<Accordion title="What is a Modifier in Jetpack Compose, and why does order matter?">
+
+A `Modifier` is a chain of decoration instructions applied to a composable — controlling its size, padding, background, click handling, drawing, and more. Modifiers are **applied in order** from left to right (or top to bottom in a chain), and the order significantly affects the result.
+
+```kotlin
+// Padding THEN background: background fills the padded area
+Box(
+    modifier = Modifier
+        .padding(16.dp)
+        .background(Color.Blue)
+        .size(100.dp)
+)
+
+// Background THEN padding: background includes the padding area
+Box(
+    modifier = Modifier
+        .background(Color.Blue)
+        .padding(16.dp)
+        .size(100.dp)
+)
+```
+
+Common modifiers:
+- `padding()` — space inside or around the composable.
+- `size()`, `fillMaxWidth()`, `wrapContentSize()` — sizing.
+- `background()` — draws a background.
+- `clickable {}` — makes the composable respond to clicks.
+- `clip()` — clips drawing to a shape.
+- `border()` — draws a border.
+- `weight()` — inside `Row`/`Column` to distribute space proportionally.
+
+Always think about the order of modifiers — it determines the visual hierarchy and interaction areas.
+</Accordion>
+
+<Accordion title="How do you observe Flow or LiveData in Compose?">
+
+Use the appropriate extension function to convert a reactive stream into a Compose `State`:
+
+```kotlin
+// Collecting a Kotlin Flow
+@Composable
+fun UserProfile(viewModel: UserViewModel) {
+    val user by viewModel.userFlow.collectAsState(initial = null)
+    // or with lifecycle awareness (avoids collecting when app is backgrounded):
+    val user2 by viewModel.userFlow.collectAsStateWithLifecycle(initialValue = null)
+
+    user?.let { Text(it.name) } ?: CircularProgressIndicator()
+}
+
+// Observing LiveData
+@Composable
+fun OrderList(viewModel: OrderViewModel) {
+    val orders by viewModel.ordersLiveData.observeAsState(initial = emptyList())
+    LazyColumn { items(orders) { Text(it.title) } }
+}
+```
+
+`collectAsStateWithLifecycle` (from `lifecycle-runtime-compose`) is preferred for `Flow` because it respects the `Lifecycle.State` and stops collecting when the app is in the background, saving resources.
+</Accordion>
+
+<Accordion title="What is derivedStateOf?">
+
+`derivedStateOf` creates a state object whose value is computed from one or more other state objects. It **only triggers recomposition** when the derived value actually changes, not every time the source state changes.
+
+Use it to avoid unnecessary recompositions when a composable only cares about a derived condition, not every intermediate state change.
+
+```kotlin
+@Composable
+fun ScrollToTopButton(listState: LazyListState) {
+    // Without derivedStateOf: recomposes on EVERY scroll event
+    // val showButton = listState.firstVisibleItemIndex > 0
+
+    // With derivedStateOf: recomposes only when the boolean changes
+    val showButton by remember {
+        derivedStateOf { listState.firstVisibleItemIndex > 0 }
+    }
+
+    if (showButton) {
+        FloatingActionButton(onClick = { /* scroll to top */ }) {
+            Icon(Icons.Default.ArrowUpward, contentDescription = "Scroll to top")
+        }
+    }
+}
+```
+
+`derivedStateOf` is most valuable when the source state changes frequently but the derived state changes infrequently.
+</Accordion>
+
+<Accordion title="What is rememberUpdatedState?">
+
+`rememberUpdatedState` is used when a long-running side effect (inside `LaunchedEffect` or `DisposableEffect`) needs to reference a value that may change over time, but you do **not** want to restart the effect when that value changes.
+
+```kotlin
+@Composable
+fun Timer(onTimeout: () -> Unit) {
+    // Without rememberUpdatedState, the effect would restart every time
+    // the caller passes a new onTimeout lambda
+    val currentOnTimeout by rememberUpdatedState(onTimeout)
+
+    LaunchedEffect(Unit) { // key = Unit → only runs once
+        delay(5_000)
+        currentOnTimeout() // always calls the LATEST version of onTimeout
+    }
+}
+```
+
+The pattern:
+1. `LaunchedEffect` is keyed to something stable (often `Unit` or a fixed ID) so it does not restart.
+2. `rememberUpdatedState` wraps the frequently-changing value so the effect always sees the latest version.
+
+This avoids the trade-off between missing updates and restarting the effect unnecessarily.
+</Accordion>
+
+<Accordion title="What is the lifecycle of a Composable?">
+
+A composable goes through three lifecycle phases:
+
+1. **Enter the Composition** — the composable appears in the composition tree for the first time. State is initialised, `LaunchedEffect` and `DisposableEffect` blocks start.
+
+2. **Recompose** — when state or parameters change, the composable re-executes. Compose skips recomposition if inputs are the same (smart recomposition). `remember`ed values are preserved across recompositions.
+
+3. **Leave the Composition** — the composable is removed (e.g., navigation, condition changes). `DisposableEffect`'s `onDispose` runs, `LaunchedEffect` coroutines are cancelled, and `remember`ed state is discarded.
+
+```
+Enter Composition
+      |
+      ↓
+[Recompose]* ←—— state/param changes
+      |
+      ↓
+Leave Composition (onDispose, coroutine cancellation)
+```
+
+Unlike Android Views, composables do not have `onStart`/`onStop` callbacks. Use `DisposableEffect` with a `Lifecycle` observer if you need lifecycle awareness.
+</Accordion>
+
+<Accordion title="How do you handle lifecycle events inside a Composable?">
+
+Use `DisposableEffect` with `LocalLifecycleOwner` to observe `Lifecycle.Event`s:
+
+```kotlin
+@Composable
+fun LifecycleAwareComponent(onResume: () -> Unit, onPause: () -> Unit) {
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_RESUME -> onResume()
+                Lifecycle.Event.ON_PAUSE  -> onPause()
+                else -> Unit
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+}
+```
+
+For stopping a `Flow` collection when the app is backgrounded, use `collectAsStateWithLifecycle` which does this automatically.
+</Accordion>
+
+<Accordion title="What are best practices for performance in Jetpack Compose?">
+
+1. **Make state reads as local as possible** — read state inside the composable that actually renders it, not higher up, to minimise the recomposition scope.
+
+2. **Use `derivedStateOf` for derived conditions** that change less often than their source state.
+
+3. **Use `key()` in lazy layouts** — ensures Compose correctly tracks items by identity during scroll or list updates.
+
+4. **Use `remember` for expensive calculations** — avoid recomputing on every recomposition.
+
+5. **Prefer stateless composables** — pass state and lambdas down; avoid unnecessary state duplication.
+
+6. **Avoid allocating objects in composable bodies** — use `remember { }` for objects that should persist across recompositions.
+
+7. **Use `@Stable` and `@Immutable`** — annotate your model classes to help the Compose compiler skip recomposition when parameters have not changed.
+
+```kotlin
+@Immutable
+data class User(val id: String, val name: String) // tells Compose this is stable
+
+@Composable
+fun UserRow(user: User) {
+    // Compose can skip recomposing this if `user` hasn't changed
+    Text(user.name)
+}
+```
+
+8. **Use `LazyColumn`/`LazyRow`** instead of `Column`/`Row` for long lists — they only compose visible items.
+
+9. **Avoid unnecessary lambda captures** — capture only what you need; unnecessary captures can prevent Compose from skipping recomposition.
+</Accordion>
+
+<Accordion title="Can you use Jetpack Compose and Android Views together in the same app?">
+
+Yes. Compose provides **interoperability APIs** so you can use both in the same project during a gradual migration.
+
+**Compose inside a View-based layout** — use `ComposeView`:
+
+```xml
+<!-- In XML layout -->
+<androidx.compose.ui.platform.ComposeView
+    android:id="@+id/compose_view"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"/>
+```
+
+```kotlin
+// In Activity/Fragment
+composeView.setContent {
+    MaterialTheme {
+        GreetingComposable(name = "Android")
+    }
+}
+```
+
+**Android View inside Compose** — use `AndroidView`:
+
+```kotlin
+@Composable
+fun LegacyMapView() {
+    AndroidView(
+        factory = { context ->
+            MapView(context).apply { /* configure map */ }
+        },
+        update = { mapView ->
+            // called on recomposition with new parameters
+        }
+    )
+}
+```
+
+This means you can incrementally adopt Compose, screen by screen or component by component, without a full rewrite.
+</Accordion>
+
+<Accordion title="What is CompositionLocal?">
+
+`CompositionLocal` provides a way to pass data **implicitly down the composition tree** without passing it explicitly through every composable's parameter list. It is used for ambient/contextual values like `MaterialTheme`, `LocalContext`, `LocalDensity`.
+
+```kotlin
+// Define a CompositionLocal
+val LocalUserRole = compositionLocalOf<UserRole> { error("No UserRole provided") }
+
+// Provide a value at a certain level of the tree
+@Composable
+fun App() {
+    CompositionLocalProvider(LocalUserRole provides UserRole.Admin) {
+        Dashboard()
+    }
+}
+
+// Consume the value anywhere below in the tree
+@Composable
+fun Dashboard() {
+    val role = LocalUserRole.current // reads the provided value
+    if (role == UserRole.Admin) AdminPanel() else UserPanel()
+}
+```
+
+Use `compositionLocalOf` when the value changes at runtime (triggers recomposition for only the composables that read it).  
+Use `staticCompositionLocalOf` when the value is constant — cheaper because it does not track reads.
+
+<Note>
+Avoid overusing `CompositionLocal`. Prefer explicit parameters for most data. Reserve `CompositionLocal` for ambient values that are genuinely global to the subtree (theme, locale, density).
+</Note>
+</Accordion>
+
+<Accordion title="What are the three phases of Jetpack Compose?">
+
+Compose renders UI in three distinct phases, executed in order on every frame:
+
+1. **Composition** — executes composable functions and builds an in-memory tree of UI nodes. This is where state is read and the UI structure is determined.
+
+2. **Layout** — measures each node and positions child nodes within parent bounds. Compose's single-pass layout avoids the multiple-measure cycles seen in the View system.
+
+3. **Drawing** — renders each node to the screen canvas using the sizes and positions determined in the Layout phase.
+
+```
+Composition → Layout → Drawing
+     ↑                    |
+     |____ (next frame) __|
+```
+
+Compose tries to skip phases if nothing has changed:
+- If only drawing properties change (e.g., color), only the Drawing phase reruns.
+- If layout constraints do not change (e.g., only text content changes), Drawing may be the only phase that reruns.
+
+State reads during each phase determine which composables are affected when that state changes.
+</Accordion>
+
+<Accordion title="What are Semantics in Jetpack Compose?">
+
+Semantics describe the **meaning** of UI elements for accessibility services (TalkBack, Switch Access) and UI testing frameworks.
+
+Compose automatically provides semantics for standard components (`Button`, `Text`, `TextField`, etc.). You can customise or add semantics using the `semantics` modifier.
+
+```kotlin
+// Accessible icon button with a content description
+IconButton(
+    onClick = { /* ... */ },
+    modifier = Modifier.semantics { contentDescription = "Close dialog" }
+) {
+    Icon(Icons.Default.Close, contentDescription = null)
+}
+
+// Merge child semantics into a single node (common for list items)
+Row(modifier = Modifier.semantics(mergeDescendants = true) {}) {
+    Icon(Icons.Default.Star, contentDescription = null)
+    Text("Favourites")
+}
+
+// Custom semantic property
+val Selected = SemanticsPropertyKey<Boolean>("Selected")
+Modifier.semantics { this[Selected] = true }
+```
+
+In tests, use `composeTestRule.onNodeWithContentDescription("Close dialog").performClick()` to interact with semantics nodes.
+</Accordion>
+
+<Accordion title="How do you handle user input and events in Jetpack Compose?">
+
+Events in Compose flow **upward** through callbacks, following unidirectional data flow. Composables receive current state as parameters and emit events via lambda callbacks.
+
+```kotlin
+@Composable
+fun LoginForm(viewModel: LoginViewModel) {
+    var email by rememberSaveable { mutableStateOf("") }
+    var password by rememberSaveable { mutableStateOf("") }
+    val uiState by viewModel.uiState.collectAsState()
+
+    Column(modifier = Modifier.padding(16.dp)) {
+        OutlinedTextField(
+            value = email,
+            onValueChange = { email = it },
+            label = { Text("Email") },
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email)
+        )
+        OutlinedTextField(
+            value = password,
+            onValueChange = { password = it },
+            label = { Text("Password") },
+            visualTransformation = PasswordVisualTransformation()
+        )
+        Button(
+            onClick = { viewModel.login(email, password) },
+            enabled = uiState !is UiState.Loading
+        ) {
+            Text("Log in")
+        }
+    }
+}
+```
+
+Gesture handling:
+```kotlin
+Modifier.pointerInput(Unit) {
+    detectTapGestures(
+        onTap    = { /* single tap */ },
+        onDoubleTap = { /* double tap */ },
+        onLongPress = { /* long press */ }
+    )
+}
+```
+</Accordion>
+
+<Accordion title="How does Navigation work in Jetpack Compose?">
+
+Use the `Navigation Compose` library (`androidx.navigation:navigation-compose`):
+
+```kotlin
+// 1. Create a NavController
+@Composable
+fun AppNavigation() {
+    val navController = rememberNavController()
+
+    NavHost(navController = navController, startDestination = "home") {
+        composable("home") {
+            HomeScreen(onNavigateToDetail = { id -> navController.navigate("detail/$id") })
+        }
+        composable(
+            route = "detail/{itemId}",
+            arguments = listOf(navArgument("itemId") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val itemId = backStackEntry.arguments?.getString("itemId")
+            DetailScreen(itemId = itemId, onBack = { navController.popBackStack() })
+        }
+    }
+}
+```
+
+Key concepts:
+- `NavHost` — the container that displays the current destination.
+- `NavController` — manages the back stack and navigation actions.
+- `composable("route")` — declares a destination.
+- Arguments and deep links are supported via the route pattern.
+
+For complex apps, define routes as sealed classes or objects to avoid string typos:
+
+```kotlin
+sealed class Screen(val route: String) {
+    object Home : Screen("home")
+    object Detail : Screen("detail/{itemId}") {
+        fun createRoute(id: String) = "detail/$id"
+    }
+}
+```
+</Accordion>
+
+<Accordion title="How do you handle orientation changes in Jetpack Compose?">
+
+Use `rememberSaveable` to persist UI state across configuration changes (including orientation changes):
+
+```kotlin
+@Composable
+fun FormScreen() {
+    // Survives rotation
+    var name by rememberSaveable { mutableStateOf("") }
+    var selectedTab by rememberSaveable { mutableStateOf(0) }
+
+    // Layout adapts to screen size
+    val configuration = LocalConfiguration.current
+    val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+
+    if (isLandscape) {
+        Row { FormFields(name, { name = it }); PreviewPanel() }
+    } else {
+        Column { FormFields(name, { name = it }); PreviewPanel() }
+    }
+}
+```
+
+For complex state, use a `ViewModel` which survives configuration changes naturally:
+
+```kotlin
+@Composable
+fun ProfileScreen(viewModel: ProfileViewModel = viewModel()) {
+    val uiState by viewModel.uiState.collectAsState()
+    // ViewModel state survives rotation without rememberSaveable
+}
+```
+</Accordion>
+
+<Accordion title="What is unidirectional data flow in Jetpack Compose?">
+
+Unidirectional data flow (UDF) is the pattern where:
+- **State flows down** — from a higher-level composable (or ViewModel) to lower-level composables as parameters.
+- **Events flow up** — from lower-level composables to higher-level ones via callback lambdas.
+
+```
+ViewModel / State holder
+        |  (state flows down)
+        ↓
+  Screen Composable
+        |  (state flows down)
+        ↓
+  Child Composables
+        |  (events flow up)
+        ↑
+  ViewModel / State holder
+```
+
+```kotlin
+// ViewModel — single source of truth
+class CounterViewModel : ViewModel() {
+    private val _count = MutableStateFlow(0)
+    val count: StateFlow<Int> = _count.asStateFlow()
+    fun increment() { _count.update { it + 1 } }
+}
+
+// Screen — mediates between ViewModel and UI
+@Composable
+fun CounterScreen(vm: CounterViewModel = viewModel()) {
+    val count by vm.count.collectAsState()
+    CounterContent(count = count, onIncrement = vm::increment) // state down, event up
+}
+
+// Leaf composable — stateless, easily testable
+@Composable
+fun CounterContent(count: Int, onIncrement: () -> Unit) {
+    Button(onClick = onIncrement) { Text("Count: $count") }
+}
+```
+
+UDF makes state changes predictable and traceable, and makes composables independently testable.
+</Accordion>
+
+<Accordion title="How do you create Custom Layouts in Jetpack Compose?">
+
+Use the `Layout` composable to measure and position children with full control:
+
+```kotlin
+@Composable
+fun SimpleFlowRow(
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit
+) {
+    Layout(content = content, modifier = modifier) { measurables, constraints ->
+        var x = 0
+        var y = 0
+        var rowHeight = 0
+
+        val placeables = measurables.map { measurable ->
+            measurable.measure(constraints.copy(minWidth = 0))
+        }
+
+        layout(constraints.maxWidth, constraints.maxHeight) {
+            placeables.forEach { placeable ->
+                if (x + placeable.width > constraints.maxWidth) {
+                    x = 0
+                    y += rowHeight
+                    rowHeight = 0
+                }
+                placeable.placeRelative(x, y)
+                x += placeable.width
+                rowHeight = maxOf(rowHeight, placeable.height)
+            }
+        }
+    }
+}
+```
+
+For custom drawing without children, use `Canvas`:
+
+```kotlin
+@Composable
+fun CircleProgress(progress: Float) {
+    Canvas(modifier = Modifier.size(100.dp)) {
+        drawArc(
+            color = Color.Blue,
+            startAngle = -90f,
+            sweepAngle = 360f * progress,
+            useCenter = false,
+            style = Stroke(width = 8.dp.toPx())
+        )
+    }
+}
+```
+</Accordion>
+
+<Accordion title="How does Jetpack Compose compare to the Android View system?">
+
+| Aspect | Android View System | Jetpack Compose |
+|---|---|---|
+| Language | XML + Java/Kotlin | Kotlin only |
+| UI model | Imperative (mutate views) | Declarative (describe UI as state function) |
+| Hierarchy | Deep, multi-measure pass | Flat, single-pass layout |
+| State management | Manual synchronisation | Built-in state observation |
+| Animations | `Animator`, `ObjectAnimator`, `MotionLayout` | `animate*AsState`, `Transition`, `AnimatedContent` |
+| Testing | Espresso, UI Automator | Compose Test APIs (`ComposeTestRule`) |
+| Interoperability | N/A | `AndroidView`, `ComposeView` |
+| Adoption | Mature, large ecosystem | Modern, rapidly growing |
+
+Compose eliminates most of the synchronisation bugs that arise from mutable view trees. However, the View system has a larger ecosystem of third-party libraries and more performance tuning documentation. Many projects use both via interop during migration.
+</Accordion>
+
+</AccordionGroup>

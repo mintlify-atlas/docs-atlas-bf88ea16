@@ -1,0 +1,76 @@
+---
+title: "How to Use This Guide"
+description: "A study strategy and guide for getting the most out of this Android interview preparation resource."
+---
+
+This guide is a **reference cheat sheet**, not a tutorial. It assumes you have some Android development experience and are preparing to articulate that knowledge clearly in a technical interview. Each section presents questions and answers in the format you are likely to encounter: concise, direct, and focused on the "why" behind the behavior — not just the "what."
+
+Use this guide alongside your hands-on practice. Reading alone is not enough. You need to be able to reproduce, explain, and discuss these concepts under interview pressure.
+
+## Study strategy
+
+<Steps>
+  <Step title="Identify your experience level and prioritize accordingly">
+    Junior roles focus on Kotlin fundamentals, Activity/Fragment lifecycle, RecyclerView, and basic architecture. Mid-level roles emphasize Coroutines, Flow, ViewModel/LiveData, and clean code patterns. Senior roles dig deep into system design, performance, advanced architecture, and library internals. Start with the sections most relevant to your target level.
+  </Step>
+  <Step title="Start with Kotlin Coroutines and Flow for modern Android roles">
+    Almost every product-based company interview will include questions on Coroutines and Flow. These topics are central to modern Android development and are frequently misunderstood. Prioritize them early, even if you have some existing familiarity.
+  </Step>
+  <Step title="Study each section deeply — understand the why, not just the what">
+    Interviewers follow up. If you say "LiveData is lifecycle-aware," they will ask how. If you say "ViewModel survives configuration changes," they will ask why. For each answer, trace the reasoning: what problem does this solve, how does it work under the hood, and what are the tradeoffs?
+  </Step>
+  <Step title="Practice explaining answers out loud">
+    Reading silently and speaking clearly under pressure are very different skills. After studying each section, close the guide and explain the answers aloud as if you were in an interview. This exposes gaps in your understanding and builds fluency.
+  </Step>
+  <Step title="For senior roles, spend extra time on Architecture and System Design">
+    The [Architecture](/architecture/android-architecture) and [System Design](/architecture/android-system-design) sections are where senior interviews are won or lost. Practice designing systems end-to-end: data flow, state management, offline support, scalability, and tradeoffs between approaches.
+  </Step>
+</Steps>
+
+## Frequently asked questions
+
+<AccordionGroup>
+  <Accordion title="What are the most important topics for Android interviews?">
+    For most Android roles at product-based companies, the highest-priority topics are:
+
+    - **Kotlin Coroutines** — suspend functions, dispatchers, structured concurrency, exception handling
+    - **Kotlin Flow** — StateFlow, SharedFlow, operators, cold vs hot flows
+    - **ViewModel and LiveData** — lifecycle awareness, configuration change survival, observer pattern
+    - **RecyclerView** — adapter, ViewHolder pattern, DiffUtil, item decorations
+    - **Architecture patterns** — MVVM, Clean Architecture, separation of concerns
+    - **Dependency injection** — Hilt/Dagger scopes, component hierarchies
+
+    Topics like Java concurrency, system design, and performance optimization become more important at senior levels.
+  </Accordion>
+
+  <Accordion title="How is this guide organized?">
+    The guide is organized by topic area, each on its own page. Within each page, questions and answers are grouped by sub-topic and presented in an expandable Q&A format. You can read a section top-to-bottom or jump directly to a specific question.
+
+    The navigation sidebar follows a logical progression: start with Kotlin (the language), move to Android core concepts, then architecture and libraries. You do not need to follow this order — navigate to whatever is most relevant to your preparation.
+  </Accordion>
+
+  <Accordion title="What level of detail is expected in interview answers?">
+    Aim for answers that are **concise but complete**. A good interview answer:
+
+    - Directly addresses the question without unnecessary preamble
+    - Demonstrates that you understand the underlying mechanism, not just the API
+    - Acknowledges tradeoffs when they exist
+    - Uses a brief code example if it adds clarity
+
+    Avoid reciting definitions verbatim. Interviewers can tell the difference between someone who understands a concept and someone who memorized a definition.
+  </Accordion>
+
+  <Accordion title="Should I memorize these answers?">
+    No. Memorized answers break down the moment a follow-up question comes in a slightly different form. Instead, understand the concepts well enough to explain them in your own words, from first principles.
+
+    Use the answers in this guide as a reference for what a complete, accurate answer looks like — then practice reconstructing the key points without looking.
+  </Accordion>
+</AccordionGroup>
+
+<Tip>
+  Video explanations for many of the questions in this guide are available on the [Outcome School YouTube channel](https://www.youtube.com/@amitshekhar). Watching an explanation can help reinforce concepts that are hard to grasp from text alone.
+</Tip>
+
+<Note>
+  This guide is continuously updated as new topics become relevant and existing answers are refined. Check the [GitHub repository](https://github.com/amitshekhariitbhu/android-interview-questions) for the latest additions and community contributions.
+</Note>

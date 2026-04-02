@@ -1,0 +1,382 @@
+---
+title: "RxJava"
+description: "Interview questions and answers on RxJava covering observables, subjects, operators, schedulers, error handling, and practical Android use cases like instant search and pagination."
+keywords: ["RxJava", "Observable", "Single", "Maybe", "Flowable", "Subject", "operators", "schedulers", "CompositeDisposable", "flatMap", "zip"]
+---
+
+## Overview
+
+RxJava is a Java implementation of Reactive Extensions. It provides a composable API for handling asynchronous data streams using the Observer pattern. Although Kotlin coroutines and Flow have become the preferred approach for new Android code, RxJava remains prevalent in existing codebases and is frequently asked about in interviews.
+
+<AccordionGroup>
+
+  <Accordion title="What is RxJava and why use it?">
+    RxJava is a library for composing asynchronous and event-based programs using observable sequences. It extends the Observer pattern to support sequences of data and events, and adds powerful operators for transforming, filtering, and combining those sequences.
+
+    **Core benefits:**
+    - **Composability** — chain complex async operations with operators instead of nested callbacks.
+    - **Threading** — `Schedulers` make it easy to switch threads without explicit `Handler` or `AsyncTask` usage.
+    - **Error handling** — errors propagate through the chain and are handled in one place (`onError`).
+    - **Cancellation** — disposables provide clean lifecycle management.
+    - **Backpressure** — `Flowable` handles producers that emit faster than consumers can process.
+
+    The three core concepts are:
+    - **Observable** — emits items.
+    - **Observer** — receives items.
+    - **Operator** — transforms or combines observables.
+  </Accordion>
+
+  <Accordion title="What are the types of Observables in RxJava?">
+    RxJava provides five observable types, each suited to a different cardinality of emissions:
+
+    | Type | Emissions | Completion | Use case |
+    |------|-----------|------------|----------|
+    | `Observable<T>` | 0..N items | Yes | General sequences, UI events |
+    | `Single<T>` | Exactly 1 item | Yes (success/error) | Single network request |
+    | `Maybe<T>` | 0 or 1 item | Yes | Database query that may return null |
+    | `Completable` | No items | Yes (complete/error) | Fire-and-forget operations (write, delete) |
+    | `Flowable<T>` | 0..N items | Yes | High-volume streams needing backpressure |
+
+    ```java
+    // Single — one result or error
+    Single<User> userSingle = apiService.getUser(userId);
+
+    // Completable — write operation, no return value
+    Completable saveCompletable = db.userDao().insert(user);
+
+    // Maybe — might return a cached value or be empty
+    Maybe<User> cachedUser = cache.getUser(userId);
+
+    // Flowable — sensor data, database query results with backpressure
+    Flowable<List<Post>> postsFlowable = db.postDao().getAllPosts();
+    ```
+  </Accordion>
+
+  <Accordion title="What are Subjects in RxJava?">
+    A `Subject` is both an `Observable` and an `Observer` — it can receive items and emit them to its own subscribers. Subjects are useful for bridging non-reactive code into the reactive world.
+
+    **`PublishSubject`**: Emits only those items that are emitted after the time of subscription. Subscribers that subscribe late miss previously emitted items.
+
+    **`BehaviorSubject`**: Replays the most recent item (or a seed value if none has been emitted) to each new subscriber, then emits subsequent items.
+
+    **`ReplaySubject`**: Replays all (or a configurable number of) previously emitted items to each new subscriber.
+
+    **`AsyncSubject`**: Emits only the last item emitted by the source observable, and only after that source completes.
+
+    ```java
+    // BehaviorSubject — useful for current state
+    BehaviorSubject<String> subject = BehaviorSubject.createDefault("initial");
+
+    subject.subscribe(value -> Log.d("TAG", "Subscriber 1: " + value));
+    subject.onNext("update 1");
+
+    // Subscriber 2 immediately receives "update 1" (the current value)
+    subject.subscribe(value -> Log.d("TAG", "Subscriber 2: " + value));
+
+    subject.onNext("update 2"); // both subscribers receive this
+    ```
+  </Accordion>
+
+  <Accordion title="map vs flatMap operators — what is the difference?">
+    Both operators transform emitted items, but they differ in what the transformation function returns:
+
+    - **`map`** — transforms each item synchronously. The function returns the transformed item directly (`T → R`).
+    - **`flatMap`** — transforms each item into an Observable and flattens (merges) all the resulting Observables into a single Observable (`T → Observable<R>`). The inner observables are subscribed to concurrently — order is not guaranteed.
+
+    ```java
+    // map: transform a User to their display name (sync, no nesting)
+    observable
+        .map(user -> user.getDisplayName())
+        .subscribe(name -> show(name));
+
+    // flatMap: for each userId, make a network call (async, concurrent)
+    userIdsObservable
+        .flatMap(userId -> apiService.getUser(userId)) // returns Observable<User>
+        .subscribe(user -> show(user));
+    ```
+
+    **`switchMap`** is a variant of `flatMap` that cancels the previous inner Observable when a new item arrives — useful for search-as-you-type where only the latest result matters.
+
+    **`concatMap`** is like `flatMap` but subscribes to inner Observables sequentially, preserving order.
+  </Accordion>
+
+  <Accordion title="zip, merge vs concat — what are they for?">
+    These operators combine multiple Observables:
+
+    **`zip`** — combines items from two or more Observables pairwise using a combiner function. It emits only when all sources have emitted an item for the current index. Used for parallel network calls where you need all results together.
+
+    ```java
+    Observable.zip(
+        apiService.getUserProfile(userId),
+        apiService.getUserPosts(userId),
+        (profile, posts) -> new UserWithPosts(profile, posts)
+    ).subscribe(result -> display(result));
+    ```
+
+    **`merge`** — subscribes to multiple Observables concurrently and emits items as they arrive, interleaving them. Order is not guaranteed. Errors from any source terminate the merged stream immediately.
+
+    **`concat`** — subscribes to Observables sequentially — the next Observable does not start until the previous one completes. Order is preserved. Suitable when you want to try a cache first, then fall back to the network.
+
+    ```java
+    // concat: cache first, then network
+    Observable.concat(
+        cacheObservable,
+        networkObservable
+    ).firstElement().subscribe(result -> display(result));
+    ```
+  </Accordion>
+
+  <Accordion title="How do Timer, Delay, and Interval operators work in RxJava?">
+    These operators introduce time-based behavior into reactive streams.
+
+    **`timer`** — emits a single `0L` after a specified delay, then completes. Useful for one-shot delayed actions.
+
+    ```java
+    Observable.timer(2, TimeUnit.SECONDS)
+        .subscribeOn(Schedulers.computation())
+        .observeOn(AndroidSchedulers.mainThread())
+        .subscribe(tick -> performDelayedAction());
+    ```
+
+    **`delay`** — shifts all emissions from an Observable forward in time by a specified duration.
+
+    ```java
+    apiObservable
+        .delay(500, TimeUnit.MILLISECONDS)
+        .subscribe(result -> handle(result));
+    ```
+
+    **`interval`** — emits sequential `Long` values (0, 1, 2, ...) at a fixed time interval indefinitely. Useful for polling.
+
+    ```java
+    Observable.interval(1, TimeUnit.SECONDS)
+        .subscribeOn(Schedulers.computation())
+        .observeOn(AndroidSchedulers.mainThread())
+        .subscribe(tick -> refreshData());
+    ```
+  </Accordion>
+
+  <Accordion title="How do you handle errors in RxJava?">
+    RxJava provides several operators for error handling:
+
+    **`onErrorReturn`** — catches an error and emits a fallback item, then completes normally.
+
+    ```java
+    apiObservable
+        .onErrorReturn(throwable -> defaultUser)
+        .subscribe(user -> display(user));
+    ```
+
+    **`onErrorResumeNext`** — catches an error and switches to a different Observable.
+
+    ```java
+    networkObservable
+        .onErrorResumeNext(throwable -> cacheObservable)
+        .subscribe(data -> display(data));
+    ```
+
+    **`retry`** — resubscribes to the source Observable when it emits an error, up to a specified number of times.
+
+    ```java
+    apiObservable
+        .retry(3)
+        .subscribe(result -> handle(result), error -> showError(error));
+    ```
+
+    **`retryWhen`** — provides fine-grained control over retry logic, enabling exponential backoff.
+
+    ```java
+    apiObservable
+        .retryWhen(errors -> errors.zipWith(
+            Observable.range(1, 3),
+            (error, retryCount) -> retryCount
+        ).flatMap(retryCount ->
+            Observable.timer((long) Math.pow(2, retryCount), TimeUnit.SECONDS)
+        ))
+        .subscribe(result -> handle(result));
+    ```
+  </Accordion>
+
+  <Accordion title="Schedulers.io() vs Schedulers.computation() vs AndroidSchedulers.mainThread()">
+    Schedulers control which thread an Observable runs on.
+
+    | Scheduler | Thread pool | Use case |
+    |-----------|-------------|----------|
+    | `Schedulers.io()` | Unbounded, cached threads | I/O-bound work: network, file, database |
+    | `Schedulers.computation()` | Fixed pool (= CPU count) | CPU-bound work: calculations, transformations |
+    | `Schedulers.single()` | Single thread | Sequential, ordered tasks |
+    | `Schedulers.newThread()` | New thread per subscription | Rare — prefer `io()` |
+    | `AndroidSchedulers.mainThread()` | Android main (UI) thread | Updating UI |
+
+    **`subscribeOn`** controls which thread the Observable source runs on. Only the first call has effect.
+
+    **`observeOn`** controls which thread downstream operators and the observer run on. Can be called multiple times.
+
+    ```java
+    apiService.getUser(userId)          // emits on the thread that calls subscribe
+        .subscribeOn(Schedulers.io())   // network call runs on io thread pool
+        .map(user -> transform(user))   // still on io thread
+        .observeOn(AndroidSchedulers.mainThread())  // switch to main thread
+        .subscribe(user -> updateUI(user));          // runs on main thread
+    ```
+  </Accordion>
+
+  <Accordion title="dispose() vs clear() on CompositeDisposable — what is the difference?">
+    `CompositeDisposable` manages multiple `Disposable` objects, allowing you to cancel all subscriptions at once when a component is destroyed.
+
+    - **`clear()`** — disposes all currently contained disposables and empties the container. The `CompositeDisposable` itself remains usable — you can add new disposables after calling `clear()`.
+
+    - **`dispose()`** — disposes all contained disposables, empties the container, and marks the `CompositeDisposable` as disposed. Any disposables added afterwards are immediately disposed. The container is no longer usable.
+
+    ```kotlin
+    class MyViewModel : ViewModel() {
+        private val compositeDisposable = CompositeDisposable()
+
+        fun loadData() {
+            val disposable = apiObservable
+                .subscribeOn(Schedulers.io())
+                .observeOn(AndroidSchedulers.mainThread())
+                .subscribe({ data -> handleData(data) }, { error -> handleError(error) })
+            compositeDisposable.add(disposable)
+        }
+
+        override fun onCleared() {
+            super.onCleared()
+            compositeDisposable.clear() // or .dispose() — either works here
+        }
+    }
+    ```
+
+    **Rule of thumb:** use `clear()` in Fragment's `onStop()` if you plan to resubscribe in `onStart()`. Use `dispose()` in `onDestroy()` or `ViewModel.onCleared()` when the component is permanently gone.
+  </Accordion>
+
+  <Accordion title="Create vs fromCallable operators — when to use each?">
+    Both create an Observable from custom code, but they differ in semantics:
+
+    **`Observable.create`** gives you full control via the `ObservableEmitter`. You call `onNext`, `onError`, and `onComplete` manually. Use it when you need to emit multiple items or bridge an existing callback-based API.
+
+    ```java
+    Observable.create(emitter -> {
+        try {
+            List<User> users = db.getAllUsers(); // blocking call
+            emitter.onNext(users);
+            emitter.onComplete();
+        } catch (Exception e) {
+            emitter.onError(e);
+        }
+    });
+    ```
+
+    **`Observable.fromCallable`** wraps a `Callable` (a function that returns a single value or throws). It automatically calls `onNext` with the returned value, then `onComplete`, or `onError` if an exception is thrown. Use it for simple blocking single-value operations.
+
+    ```java
+    Observable.fromCallable(() -> db.getUser(userId)); // clean, less boilerplate
+    ```
+
+    <Tip>
+      Prefer `fromCallable` for wrapping single blocking calls. Use `create` when you need to emit multiple items, check `isDisposed()` between emissions, or bridge a callback API.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="What is the defer operator and when should you use it?">
+    `Observable.defer` delays the creation of the Observable until a subscriber subscribes. The factory function is called fresh for each subscriber, ensuring each subscription gets its own Observable instance with a fresh evaluation of any captured variables.
+
+    Without `defer`, if you capture a variable at Observable creation time and it changes later, subscribers see the old value:
+
+    ```java
+    // Bug: userId is evaluated when the Observable is created, not when subscribed
+    String userId = getUserId(); // could be null at this point
+    Observable<User> userObs = apiService.getUser(userId);
+
+    // With defer: userId is evaluated at subscription time
+    Observable<User> userObs = Observable.defer(() ->
+        apiService.getUser(getUserId())
+    );
+    ```
+
+    Use `defer` when:
+    - The Observable depends on a variable that changes over time.
+    - You want to ensure each subscriber gets a fresh execution.
+    - You are creating reusable Observable factories.
+  </Accordion>
+
+  <Accordion title="How do you implement instant search with RxJava?">
+    Instant search requires debouncing keystrokes to avoid firing a network request on every character, filtering out duplicate or empty queries, and switching to the latest query when a new one arrives before the previous completes.
+
+    ```java
+    RxTextView.textChanges(searchEditText)       // emit on every keystroke
+        .debounce(300, TimeUnit.MILLISECONDS)    // wait 300ms after user stops typing
+        .filter(text -> text.length() >= 2)      // ignore very short queries
+        .distinctUntilChanged()                  // skip if same as last query
+        .switchMap(query ->                      // cancel previous, switch to latest
+            apiService.search(query.toString())
+                .subscribeOn(Schedulers.io())
+                .onErrorReturn(e -> Collections.emptyList())
+        )
+        .observeOn(AndroidSchedulers.mainThread())
+        .subscribe(results -> adapter.updateResults(results));
+    ```
+
+    Key operators:
+    - `debounce` — prevents excessive requests during rapid typing.
+    - `distinctUntilChanged` — avoids re-querying the same term.
+    - `switchMap` — cancels the in-flight request when a new query arrives.
+  </Accordion>
+
+  <Accordion title="How do you implement pagination in RecyclerView using RxJava?">
+    Pagination requires detecting when the user scrolls near the end of the list, then loading the next page while preventing duplicate requests.
+
+    ```java
+    // Track scroll events from RecyclerView
+    PublishSubject<Integer> pageSubject = PublishSubject.create();
+
+    recyclerView.addOnScrollListener(new RecyclerView.OnScrollListener() {
+        @Override
+        public void onScrolled(@NonNull RecyclerView rv, int dx, int dy) {
+            LinearLayoutManager lm = (LinearLayoutManager) rv.getLayoutManager();
+            int totalItems = lm.getItemCount();
+            int lastVisible = lm.findLastVisibleItemPosition();
+            if (!isLoading && lastVisible >= totalItems - 5) {
+                pageSubject.onNext(++currentPage);
+            }
+        }
+    });
+
+    pageSubject
+        .onBackpressureLatest()
+        .concatMap(page ->             // sequential: don't load page 3 before page 2 finishes
+            apiService.getPosts(page)
+                .subscribeOn(Schedulers.io())
+                .doOnSubscribe(d -> isLoading = true)
+                .doFinally(() -> isLoading = false)
+        )
+        .observeOn(AndroidSchedulers.mainThread())
+        .subscribe(posts -> adapter.appendPosts(posts));
+    ```
+  </Accordion>
+
+  <Accordion title="How do you make parallel network calls with the RxJava zip operator?">
+    The `zip` operator combines results from multiple Observables pairwise. Since each Observable is subscribed independently (and typically on `Schedulers.io()`), the calls execute in parallel. The combined result is emitted only when all sources have emitted their item.
+
+    ```java
+    Observable.zip(
+        apiService.getUserProfile(userId).subscribeOn(Schedulers.io()),
+        apiService.getUserPosts(userId).subscribeOn(Schedulers.io()),
+        apiService.getUserFollowers(userId).subscribeOn(Schedulers.io()),
+        (profile, posts, followers) -> new UserDashboard(profile, posts, followers)
+    )
+    .observeOn(AndroidSchedulers.mainThread())
+    .subscribe(
+        dashboard -> showDashboard(dashboard),
+        error -> showError(error)
+    );
+    ```
+
+    All three network calls start at roughly the same time. The total time is approximately `max(call1, call2, call3)` rather than `call1 + call2 + call3`.
+
+    <Note>
+      If any one of the zipped sources emits an error, the entire zip stream errors immediately and the other subscriptions are disposed.
+    </Note>
+  </Accordion>
+
+</AccordionGroup>

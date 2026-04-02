@@ -1,0 +1,824 @@
+---
+title: "Android Tools and Testing"
+description: "Interview questions and answers on Android testing frameworks, build tools, profiling, CI/CD, ProGuard, R8, Gradle, and app release practices."
+keywords: ["unit testing", "Espresso", "Mockito", "Robolectric", "UI Automator", "ADB", "StrictMode", "Lint", "ProGuard", "R8", "Gradle", "Firebase", "CI/CD", "APK size"]
+---
+
+## Overview
+
+This section covers Android tooling, testing strategies, build systems, and production release practices — areas that senior engineers are expected to know well in interviews.
+
+<AccordionGroup>
+
+  <Accordion title="What is unit testing and what are local vs instrumented unit tests?">
+    A unit test verifies that a single, isolated unit of code (a class, a function) behaves correctly for a given input. It runs fast, is deterministic, and does not depend on external systems.
+
+    <Tabs>
+      <Tab title="Local Unit Tests">
+        Run on the JVM on your development machine — no Android device or emulator required. Located in `src/test/`. Much faster than instrumented tests.
+
+        Use for: business logic, ViewModels, repositories, pure Kotlin/Java classes.
+
+        ```kotlin
+        // src/test/java/com/example/CalculatorTest.kt
+        class CalculatorTest {
+            private lateinit var calculator: Calculator
+
+            @Before
+            fun setUp() {
+                calculator = Calculator()
+            }
+
+            @Test
+            fun `addition returns correct sum`() {
+                val result = calculator.add(2, 3)
+                assertEquals(5, result)
+            }
+        }
+        ```
+      </Tab>
+      <Tab title="Instrumented Tests">
+        Run on an Android device or emulator. Located in `src/androidTest/`. Have access to the Android framework (`Context`, `Activity`, etc.).
+
+        Use for: database operations, UI tests, code that requires Android APIs.
+
+        ```kotlin
+        // src/androidTest/java/com/example/UserDaoTest.kt
+        @RunWith(AndroidJUnit4::class)
+        class UserDaoTest {
+            private lateinit var db: AppDatabase
+            private lateinit var userDao: UserDao
+
+            @Before
+            fun setUp() {
+                db = Room.inMemoryDatabaseBuilder(
+                    ApplicationProvider.getApplicationContext(),
+                    AppDatabase::class.java
+                ).allowMainThreadQueries().build()
+                userDao = db.userDao()
+            }
+
+            @Test
+            fun insertAndRetrieveUser() = runTest {
+                val user = User(id = 1, name = "Alice")
+                userDao.insert(user)
+                val retrieved = userDao.getUser(1)
+                assertEquals(user, retrieved)
+            }
+
+            @After
+            fun tearDown() {
+                db.close()
+            }
+        }
+        ```
+      </Tab>
+    </Tabs>
+  </Accordion>
+
+  <Accordion title="What is Espresso and how do you use it for UI testing?">
+    Espresso is Google's UI testing framework for Android. It runs as an instrumented test on a device or emulator and can interact with UI elements and verify their state.
+
+    Espresso automatically synchronizes with the UI thread and `AsyncTask` queue, so you rarely need explicit waits.
+
+    The three main components:
+    - **`onView(matcher)`** — finds a view using a `ViewMatcher`.
+    - **`.perform(action)`** — interacts with the view (click, type, scroll).
+    - **`.check(assertion)`** — verifies the view's state.
+
+    ```kotlin
+    @RunWith(AndroidJUnit4::class)
+    class LoginActivityTest {
+
+        @get:Rule
+        val activityRule = ActivityScenarioRule(LoginActivity::class.java)
+
+        @Test
+        fun validLogin_navigatesToHome() {
+            onView(withId(R.id.emailInput))
+                .perform(typeText("user@example.com"), closeSoftKeyboard())
+
+            onView(withId(R.id.passwordInput))
+                .perform(typeText("password123"), closeSoftKeyboard())
+
+            onView(withId(R.id.loginButton))
+                .perform(click())
+
+            onView(withId(R.id.homeScreen))
+                .check(matches(isDisplayed()))
+        }
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="What is Robolectric?">
+    Robolectric is a testing framework that runs Android instrumented-style tests on the JVM without a device or emulator. It provides simulated implementations of Android SDK classes so you can test code that uses Android APIs locally.
+
+    **Advantages:**
+    - Much faster than running on an emulator.
+    - No emulator or device setup required in CI.
+    - Can test code that uses `Context`, `Intent`, `SharedPreferences`, and similar APIs.
+
+    **Disadvantages:**
+    - Simulated Android behavior may differ from real device behavior.
+    - Not all Android APIs are implemented — some are stubs.
+    - Tests involving hardware (camera, GPS, Bluetooth) are not realistic.
+    - Slower than pure JVM unit tests.
+    - May mask bugs that only appear on real devices.
+
+    ```kotlin
+    @RunWith(RobolectricTestRunner::class)
+    class MyActivityTest {
+        @Test
+        fun clickingButton_showsToast() {
+            val activity = Robolectric.buildActivity(MainActivity::class.java)
+                .create().resume().get()
+            activity.findViewById<Button>(R.id.myButton).performClick()
+            val toast = ShadowToast.getLatestToast()
+            assertNotNull(toast)
+        }
+    }
+    ```
+
+    <Note>
+      Robolectric is best used for integration tests that need Android APIs but where running on a real device is too slow for the feedback loop you need. For critical UI flows, always supplement with real Espresso tests.
+    </Note>
+  </Accordion>
+
+  <Accordion title="What is UI Automator?">
+    UI Automator is an Android testing framework for writing cross-app UI tests. Unlike Espresso (which is scoped to your app's process), UI Automator can interact with system UI and other apps.
+
+    Use cases:
+    - Testing permission dialogs.
+    - Testing interactions that span multiple apps.
+    - Testing system notifications.
+    - Automating end-to-end flows that involve the Android launcher or settings.
+
+    ```kotlin
+    @RunWith(AndroidJUnit4::class)
+    class SystemPermissionTest {
+        private val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
+
+        @Test
+        fun grantCameraPermission() {
+            // Launch the app
+            val context = ApplicationProvider.getApplicationContext<Context>()
+            val intent = context.packageManager.getLaunchIntentForPackage(context.packageName)
+            context.startActivity(intent)
+
+            // Wait for the permission dialog and click Allow
+            val allowButton = device.findObject(
+                UiSelector().text("Allow").packageName("com.android.permissioncontroller")
+            )
+            if (allowButton.exists()) {
+                allowButton.click()
+            }
+        }
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="Why is Mockito used in Android testing?">
+    Mockito is a mocking framework for Java/Kotlin. It allows you to create fake implementations of dependencies so that unit tests are isolated from collaborators like databases, network clients, and repositories.
+
+    **Key operations:**
+    - **`mock()`** — creates a fake object that does nothing by default.
+    - **`when(...).thenReturn(...)`** — stubs a method to return a specific value.
+    - **`verify(...)`** — asserts that a method was called with specific arguments.
+    - **`spy()`** — wraps a real object, overriding only the methods you stub.
+
+    ```kotlin
+    @ExtendWith(MockitoExtension::class)
+    class UserViewModelTest {
+
+        @Mock
+        private lateinit var userRepository: UserRepository
+
+        private lateinit var viewModel: UserViewModel
+
+        @Before
+        fun setUp() {
+            viewModel = UserViewModel(userRepository)
+        }
+
+        @Test
+        fun `loadUser calls repository with correct id`() = runTest {
+            val expectedUser = User(id = 1, name = "Alice")
+            whenever(userRepository.getUser(1)).thenReturn(expectedUser)
+
+            viewModel.loadUser(1)
+
+            verify(userRepository).getUser(1)
+            assertEquals(expectedUser, viewModel.user.value)
+        }
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="How do you unit test a ViewModel with Kotlin Coroutines and LiveData?">
+    Testing ViewModels that use coroutines requires two things:
+    1. A `TestDispatcher` to control coroutine execution in tests.
+    2. The `InstantTaskExecutorRule` to make LiveData post synchronously on the test thread.
+
+    ```kotlin
+    @ExtendWith(MockitoExtension::class)
+    class UserViewModelTest {
+
+        @get:Rule
+        val instantTaskExecutorRule = InstantTaskExecutorRule()
+
+        @Mock
+        private lateinit var repository: UserRepository
+
+        private val testDispatcher = UnconfinedTestDispatcher()
+        private lateinit var viewModel: UserViewModel
+
+        @Before
+        fun setUp() {
+            Dispatchers.setMain(testDispatcher)
+            viewModel = UserViewModel(repository)
+        }
+
+        @After
+        fun tearDown() {
+            Dispatchers.resetMain()
+        }
+
+        @Test
+        fun `fetchUser updates user LiveData on success`() = runTest {
+            val user = User(id = 1, name = "Alice")
+            whenever(repository.getUser(1)).thenReturn(user)
+
+            viewModel.fetchUser(1)
+
+            assertEquals(user, viewModel.user.value)
+        }
+
+        @Test
+        fun `fetchUser sets error state on failure`() = runTest {
+            whenever(repository.getUser(1)).thenThrow(RuntimeException("Network error"))
+
+            viewModel.fetchUser(1)
+
+            assertNotNull(viewModel.error.value)
+        }
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="How do you unit test a ViewModel with Kotlin Flow and StateFlow?">
+    For Flow-based ViewModels, use `turbine` (a testing library for Flows) or collect into a list during the test. Combine with `runTest` and `UnconfinedTestDispatcher`.
+
+    ```kotlin
+    @ExtendWith(MockitoExtension::class)
+    class PostsViewModelTest {
+
+        @Mock
+        private lateinit var repository: PostsRepository
+
+        private val testDispatcher = UnconfinedTestDispatcher()
+        private lateinit var viewModel: PostsViewModel
+
+        @Before
+        fun setUp() {
+            Dispatchers.setMain(testDispatcher)
+            viewModel = PostsViewModel(repository)
+        }
+
+        @After
+        fun tearDown() {
+            Dispatchers.resetMain()
+        }
+
+        @Test
+        fun `uiState emits loaded state after fetchPosts`() = runTest {
+            val posts = listOf(Post(id = 1, title = "Hello"))
+            whenever(repository.getPosts()).thenReturn(flowOf(posts))
+
+            val states = mutableListOf<UiState>()
+            val job = launch(UnconfinedTestDispatcher()) {
+                viewModel.uiState.toList(states)
+            }
+
+            viewModel.fetchPosts()
+
+            assertTrue(states.any { it is UiState.Loaded })
+            job.cancel()
+        }
+    }
+    ```
+
+    <Tip>
+      Use `Turbine` from the `app.cash.turbine` library for a more ergonomic Flow testing API. It provides `awaitItem()`, `awaitComplete()`, and `awaitError()` helpers.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="What is code coverage and how do you measure it in Android?">
+    Code coverage measures the percentage of production code that is executed by your test suite. It helps identify untested areas but is a means to an end, not a goal in itself.
+
+    Android Studio integrates with JaCoCo for local unit test coverage. Run tests with coverage enabled via **Run > Run tests with coverage** or in Gradle:
+
+    ```bash
+    ./gradlew testDebugUnitTestCoverage
+    ```
+
+    In `build.gradle.kts`:
+
+    ```kotlin
+    android {
+        buildTypes {
+            debug {
+                enableUnitTestCoverage = true
+            }
+        }
+    }
+    ```
+
+    Coverage types:
+    - **Line coverage** — which lines were executed.
+    - **Branch coverage** — which conditional branches (if/else) were taken.
+    - **Method coverage** — which methods were called.
+
+    <Warning>
+      High coverage numbers do not guarantee good tests. A test can execute a line without meaningfully asserting anything. Focus on testing the right behaviors, not hitting a coverage percentage target.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="What is ADB and what are common commands?">
+    ADB (Android Debug Bridge) is a command-line tool that allows communication between a development machine and an Android device or emulator. It provides a Unix shell for the device and is used for installing apps, copying files, reading logs, and running commands.
+
+    ```bash
+    # List connected devices
+    adb devices
+
+    # Install an APK
+    adb install app-debug.apk
+
+    # Uninstall an app
+    adb uninstall com.example.myapp
+
+    # View logcat output
+    adb logcat
+    adb logcat -s "MyTag"
+
+    # Copy a file to the device
+    adb push localfile.txt /sdcard/localfile.txt
+
+    # Copy a file from the device
+    adb pull /sdcard/remotefile.txt localfile.txt
+
+    # Open a shell on the device
+    adb shell
+
+    # Capture a screenshot
+    adb shell screencap /sdcard/screen.png && adb pull /sdcard/screen.png
+
+    # Record screen
+    adb shell screenrecord /sdcard/demo.mp4
+
+    # Clear app data
+    adb shell pm clear com.example.myapp
+
+    # Start an Activity
+    adb shell am start -n com.example.myapp/.MainActivity
+
+    # Simulate a key press
+    adb shell input keyevent KEYCODE_BACK
+    ```
+  </Accordion>
+
+  <Accordion title="What is StrictMode and how do you use it in development?">
+    StrictMode is a developer tool that detects policy violations on the main thread (disk reads/writes, network access) and memory leaks (leaked `Activity`, `Cursor`, etc.). It reports violations via logcat, dialog, or even crashing the app.
+
+    Enable it in `Application.onCreate()` or `Activity.onCreate()`, guarded by a debug check:
+
+    ```kotlin
+    if (BuildConfig.DEBUG) {
+        StrictMode.setThreadPolicy(
+            StrictMode.ThreadPolicy.Builder()
+                .detectAll()           // detect disk reads, writes, network on main thread
+                .penaltyLog()          // log violations to logcat
+                .penaltyDeath()        // crash on violation (strict mode in CI)
+                .build()
+        )
+        StrictMode.setVmPolicy(
+            StrictMode.VmPolicy.Builder()
+                .detectLeakedSqlLiteObjects()
+                .detectLeakedClosableObjects()
+                .detectActivityLeaks()
+                .penaltyLog()
+                .build()
+        )
+    }
+    ```
+
+    <Warning>
+      Never enable StrictMode in production builds. Always wrap it in `if (BuildConfig.DEBUG)`.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="What is Lint and what does it check?">
+    Android Lint is a static analysis tool built into Android Studio and the Gradle build system. It scans source code, XML resources, manifests, and compiled bytecode to find potential bugs, performance issues, security vulnerabilities, and style violations.
+
+    Categories of checks:
+    - **Correctness** — incorrect API usage, wrong argument types, missing required attributes.
+    - **Security** — exported components without permissions, hardcoded credentials, cleartext traffic.
+    - **Performance** — over-drawing, unused resources, inefficient layouts, memory leaks.
+    - **Usability** — missing content descriptions, hardcoded strings (should use resources), RTL issues.
+    - **Internationalization** — hardcoded text, formatting issues.
+
+    Run Lint from the command line:
+
+    ```bash
+    ./gradlew lint
+    # Output: app/build/reports/lint-results-debug.html
+    ```
+
+    Configure Lint in `build.gradle.kts`:
+
+    ```kotlin
+    android {
+        lint {
+            abortOnError = true          // fail the build on errors
+            warningsAsErrors = false
+            checkDependencies = true
+            baseline = file("lint-baseline.xml") // suppress existing issues
+        }
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="What is ProGuard and what is the proguard-rules.pro file used for?">
+    ProGuard is a tool that **shrinks**, **optimizes**, and **obfuscates** Java/Kotlin bytecode. In Android builds, it is integrated into the build process and runs automatically when minification is enabled.
+
+    - **Shrinking (minification)** — removes unused classes, methods, and fields. Reduces APK size significantly.
+    - **Optimization** — inlines methods, removes unused branches, and optimizes bytecode.
+    - **Obfuscation** — renames classes, methods, and fields to short meaningless names (`a`, `b`, `c`), making reverse engineering harder.
+
+    Enable in `build.gradle.kts`:
+
+    ```kotlin
+    android {
+        buildTypes {
+            release {
+                isMinifyEnabled = true
+                proguardFiles(
+                    getDefaultProguardFile("proguard-android-optimize.txt"),
+                    "proguard-rules.pro"
+                )
+            }
+        }
+    }
+    ```
+
+    The `proguard-rules.pro` file defines **keep rules** that prevent specific classes or members from being removed or renamed — necessary for classes accessed via reflection, serialization, or JNI.
+
+    ```
+    # Keep data classes used with Gson
+    -keep class com.example.model.** { *; }
+
+    # Keep Retrofit service interfaces
+    -keep interface com.example.api.** { *; }
+
+    # Keep custom exceptions
+    -keep public class * extends java.lang.Exception
+
+    # Keep Parcelable implementations
+    -keep class * implements android.os.Parcelable {
+        public static final android.os.Parcelable$Creator *;
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="R8 vs ProGuard — what is the difference?">
+    **R8** is Google's replacement for ProGuard, integrated into the Android Gradle plugin since version 3.4. It is enabled by default for all Android release builds.
+
+    | Aspect | ProGuard | R8 |
+    |--------|----------|----|
+    | Integration | External tool | Integrated into AGP |
+    | Speed | Slower (separate step) | Faster (single-pass compilation) |
+    | Dex output | Requires D8 after ProGuard | Outputs DEX directly |
+    | Compatibility | Accepts ProGuard rules | Accepts ProGuard rules |
+    | Optimization | Good | Better — more aggressive inlining and dead code removal |
+    | Kotlin support | Limited | Full Kotlin-aware optimization |
+
+    R8 runs in a single pass: it desugars, shrinks, optimizes, obfuscates, and outputs DEX bytecode simultaneously. This makes it faster than ProGuard + D8 separately.
+
+    You do not need to change your `proguard-rules.pro` file when switching from ProGuard to R8 — R8 understands the same rule format.
+
+    <Note>
+      R8 is enabled by default. ProGuard can be re-enabled by adding `android.enableR8=false` to `gradle.properties`, but this is not recommended.
+    </Note>
+  </Accordion>
+
+  <Accordion title="What is Gradle and how does the Android build system work?">
+    Gradle is the build system used by Android Studio. It is a general-purpose build tool based on a directed acyclic graph of tasks. For Android, the **Android Gradle Plugin (AGP)** adds tasks specific to compiling, packaging, and signing Android apps.
+
+    **Build variants**: A combination of a **build type** (debug, release) and a **product flavor** (free, paid). Each variant can have different resources, code, and signing configurations.
+
+    ```kotlin
+    android {
+        buildTypes {
+            debug {
+                isDebuggable = true
+                applicationIdSuffix = ".debug"
+            }
+            release {
+                isMinifyEnabled = true
+                proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            }
+        }
+        flavorDimensions += "tier"
+        productFlavors {
+            create("free") { dimension = "tier" }
+            create("paid") { dimension = "tier" }
+        }
+    }
+    ```
+
+    **`implementation` vs `api`**:
+    - `implementation` — dependency is available to the module only. Consumers of this module do not see the dependency. Faster incremental builds.
+    - `api` — dependency is exposed to consumers. Use only when you intentionally expose types from the dependency in your public API.
+
+    **`annotationProcessor` vs `kapt` vs `ksp`**:
+    - `annotationProcessor` — Java annotation processor. Does not work for Kotlin.
+    - `kapt` (Kotlin Annotation Processing Tool) — Kotlin's adapter for Java annotation processors. Slower because it stubs Kotlin code into Java.
+    - `ksp` (Kotlin Symbol Processing) — a Kotlin-first alternative. Faster than `kapt` and increasingly supported by major libraries (Room, Dagger/Hilt, Moshi).
+
+    **Gradle build speed improvements**:
+    - Enable the Gradle build cache: `org.gradle.caching=true` in `gradle.properties`.
+    - Enable parallel execution: `org.gradle.parallel=true`.
+    - Increase heap size: `org.gradle.jvmargs=-Xmx4g`.
+    - Use `ksp` instead of `kapt` where supported.
+    - Modularize the project to maximize incremental builds.
+    - Use configuration cache: `org.gradle.configuration-cache=true`.
+  </Accordion>
+
+  <Accordion title="What is the Kotlin DSL for Gradle?">
+    Kotlin DSL (Domain Specific Language) for Gradle allows you to write Gradle build scripts in Kotlin (`.gradle.kts`) instead of Groovy (`.gradle`). Build files are `build.gradle.kts` and `settings.gradle.kts`.
+
+    **Advantages over Groovy DSL:**
+    - Full IDE support — code completion, navigation, and refactoring work correctly.
+    - Type safety — errors are caught at compile time rather than at build execution time.
+    - Familiar syntax for Kotlin developers.
+    - Better refactoring support.
+
+    ```kotlin
+    // build.gradle.kts
+    plugins {
+        alias(libs.plugins.android.application)
+        alias(libs.plugins.kotlin.android)
+    }
+
+    android {
+        compileSdk = 35
+        defaultConfig {
+            applicationId = "com.example.myapp"
+            minSdk = 24
+            targetSdk = 35
+            versionCode = 1
+            versionName = "1.0"
+        }
+    }
+
+    dependencies {
+        implementation(libs.androidx.core.ktx)
+        implementation(libs.retrofit)
+        testImplementation(libs.junit)
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="How do you use the Android Studio Memory Profiler?">
+    The Memory Profiler is part of Android Studio's Profiler tool. It shows a real-time graph of memory usage and helps identify memory leaks, excessive allocations, and retained objects.
+
+    **Key steps:**
+    1. Open **View > Tool Windows > Profiler**.
+    2. Select your device and process.
+    3. Click the **Memory** timeline to open the detailed memory view.
+    4. Use **Record native allocations** or **Record Java/Kotlin allocations** to capture an allocation trace.
+    5. Click **Capture heap dump** to snapshot all live objects in the heap.
+    6. Analyze the heap dump to find objects held in memory longer than expected.
+
+    What to look for:
+    - **Leaked Activities** — `Activity` instances in the heap after navigating away.
+    - **Leaked Contexts** — `Context` objects held by static references.
+    - **Large bitmaps** — images not scaled to the view size consuming excessive memory.
+    - **Growing collections** — lists or maps that grow indefinitely.
+
+    <Tip>
+      LeakCanary is a runtime memory leak detection library that automatically detects and reports Activity and Fragment leaks during development, without needing to use the profiler manually.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="What is Firebase and what does it offer for Android?">
+    Firebase is Google's mobile backend-as-a-service (BaaS) platform. It provides a suite of products for building, growing, and monitoring Android apps:
+
+    - **Firebase Analytics** — free, unlimited event-based analytics.
+    - **Firebase Crashlytics** — real-time crash reporting and symbolication.
+    - **Firebase Cloud Messaging (FCM)** — push notifications.
+    - **Firebase Remote Config** — change app behavior without publishing an update.
+    - **Firebase Authentication** — sign-in with email/password, Google, Facebook, etc.
+    - **Cloud Firestore / Realtime Database** — NoSQL cloud databases.
+    - **Firebase Performance Monitoring** — track network requests, screen rendering, and custom traces.
+    - **Firebase App Distribution** — distribute pre-release builds to testers.
+
+    ```kotlin
+    // Example: Firebase Remote Config
+    val remoteConfig = Firebase.remoteConfig
+    remoteConfig.setDefaultsAsync(R.xml.remote_config_defaults)
+
+    remoteConfig.fetchAndActivate().addOnCompleteListener { task ->
+        if (task.isSuccessful) {
+            val featureEnabled = remoteConfig.getBoolean("new_feature_enabled")
+            if (featureEnabled) showNewFeature()
+        }
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="What is a CI/CD Pipeline for Android?">
+    A CI/CD (Continuous Integration / Continuous Delivery) pipeline automates building, testing, and deploying Android apps on every code change.
+
+    **Typical pipeline stages:**
+
+    1. **Trigger** — a commit or pull request triggers the pipeline.
+    2. **Checkout** — clone the repository.
+    3. **Build** — run `./gradlew assembleDebug` or `assembleRelease`.
+    4. **Unit tests** — run `./gradlew test` (local JVM tests).
+    5. **Lint** — run `./gradlew lint`.
+    6. **Instrumented tests** — run on Firebase Test Lab or a physical device farm.
+    7. **Code coverage** — generate and enforce coverage thresholds.
+    8. **Sign & publish** — sign the APK/AAB and upload to Google Play (internal track or production).
+
+    Popular CI platforms: GitHub Actions, Bitrise, CircleCI, GitLab CI, Fastlane.
+
+    ```yaml
+    # .github/workflows/android.yml (GitHub Actions example)
+    name: Android CI
+
+    on:
+      push:
+        branches: [ main ]
+      pull_request:
+        branches: [ main ]
+
+    jobs:
+      build:
+        runs-on: ubuntu-latest
+        steps:
+          - uses: actions/checkout@v4
+          - uses: actions/setup-java@v4
+            with:
+              java-version: '17'
+              distribution: 'temurin'
+          - name: Run unit tests
+            run: ./gradlew test
+          - name: Build release APK
+            run: ./gradlew assembleRelease
+    ```
+  </Accordion>
+
+  <Accordion title="How do you reduce APK size?">
+    APK size directly affects install conversion rates and download times. Key strategies:
+
+    - **Enable R8/ProGuard** — shrinks code and resources by removing unused code.
+    - **Enable resource shrinking** — `isShrinkResources = true` in the release build type.
+    - **Use Android App Bundle (AAB)** — Google Play delivers only the resources needed for the specific device (ABI, language, screen density).
+    - **Compress images** — use WebP instead of PNG/JPEG; use vector drawables where possible.
+    - **Remove unused languages** — use `resConfigs("en")` to strip unused locale resources.
+    - **Split APKs by ABI** — deliver separate APKs per CPU architecture instead of one fat APK.
+    - **Audit dependencies** — remove unused libraries; prefer smaller alternatives.
+    - **Use `lint --check UnusedResources`** — find and remove unused resource files.
+
+    ```kotlin
+    android {
+        buildTypes {
+            release {
+                isMinifyEnabled = true
+                isShrinkResources = true
+                proguardFiles(
+                    getDefaultProguardFile("proguard-android-optimize.txt"),
+                    "proguard-rules.pro"
+                )
+            }
+        }
+        bundle {
+            language { enableSplit = true }
+            density { enableSplit = true }
+            abi { enableSplit = true }
+        }
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="What is desugaring in Android?">
+    **Desugaring** is the process of transforming newer Java/Kotlin language features and API calls into bytecode that runs on older Android API levels. It is performed by the D8/R8 compiler at build time.
+
+    Without desugaring, using Java 8+ APIs (like `java.time`, `java.util.stream`, `Optional`) on devices running API 21–25 would cause `NoClassDefFoundError` at runtime.
+
+    With **core library desugaring** enabled, D8 includes a companion library (`desugar_jdk_libs`) that provides implementations of newer Java APIs for older Android versions.
+
+    ```kotlin
+    android {
+        compileOptions {
+            isCoreLibraryDesugaringEnabled = true
+            sourceCompatibility = JavaVersion.VERSION_17
+            targetCompatibility = JavaVersion.VERSION_17
+        }
+    }
+
+    dependencies {
+        coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.4")
+    }
+    ```
+
+    This enables APIs like `java.time.LocalDate`, `java.util.stream.Stream`, and `java.util.function.*` on devices running Android API 21+.
+  </Accordion>
+
+  <Accordion title="What is Write-Ahead Logging (WAL) in SQLite?">
+    **Write-Ahead Logging (WAL)** is an alternative journaling mode in SQLite that improves concurrency and write performance compared to the default rollback journal mode.
+
+    In the default mode, SQLite uses an exclusive lock during writes, blocking all readers. In WAL mode:
+    - **Writers** append changes to a separate WAL file instead of modifying the database file directly.
+    - **Readers** can read the main database file concurrently while a write is in progress.
+    - **Checkpointing** periodically merges the WAL file back into the main database.
+
+    **Benefits:**
+    - Significantly better read concurrency — readers are never blocked by writers.
+    - Faster write performance on most workloads.
+    - Better behavior on crash — the WAL file preserves atomic transactions.
+
+    Room uses WAL mode by default on API 16+ for better concurrency. You can configure it explicitly:
+
+    ```kotlin
+    Room.databaseBuilder(context, AppDatabase::class.java, "app.db")
+        .setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
+        .build()
+    ```
+
+    **When to avoid WAL**: WAL is less efficient for workloads with very infrequent writes and many concurrent readers that need the absolute latest data without checkpointing delays.
+  </Accordion>
+
+  <Accordion title="What is the 16 KB page size requirement for Android Apps?">
+    Starting with Android 15, the platform supports a **16 KB memory page size** in addition to the traditional 4 KB page size. This is a hardware and kernel change driven by ARM's requirement for 16 KB page alignment on newer CPUs.
+
+    **Why it matters:**
+    - Apps with native code (NDK/JNI) or precompiled `.so` libraries must be compiled and aligned for 16 KB pages to run on 16 KB page size devices.
+    - An app compiled only for 4 KB alignment will fail to load on a 16 KB page size device.
+
+    **What you need to do:**
+    - Rebuild all native libraries (`.so` files) with 16 KB alignment using NDK r27 or later.
+    - Verify third-party SDKs are also updated.
+    - Test on an emulator or device configured for 16 KB page size.
+
+    Check alignment with:
+
+    ```bash
+    objdump -p your_library.so | grep LOAD
+    # LOAD segments with align=0x4000 (16384) are 16 KB aligned
+    ```
+
+    Pure Java/Kotlin apps without native code are not affected.
+  </Accordion>
+
+  <Accordion title="What is an Android App Release Checklist?">
+    Before releasing an Android app to production, verify these areas:
+
+    **Build and signing:**
+    - `isMinifyEnabled = true` and `isShrinkResources = true` for the release build.
+    - App signed with the correct production keystore (not the debug keystore).
+    - Version code incremented; version name updated.
+    - Build is an AAB (Android App Bundle) for Play Store submissions.
+
+    **Security:**
+    - No debug logs or `Log.d` calls leaking sensitive data.
+    - `android:debuggable` is `false` in the release manifest.
+    - No hardcoded API keys or secrets in source code.
+    - Network security config enforces HTTPS.
+
+    **Testing:**
+    - All unit tests pass.
+    - Instrumented/UI tests pass on target devices.
+    - Manual testing on representative devices and OS versions.
+    - Tested on both low-end and high-end devices.
+
+    **Performance:**
+    - App startup time measured (cold, warm, hot).
+    - No ANR-causing main thread work.
+    - Memory profiler shows no obvious leaks.
+    - APK/AAB size is within acceptable limits.
+
+    **Compliance:**
+    - Privacy policy URL set in Play Console.
+    - All required permissions are justified and declared.
+    - Data safety form is accurate and up to date.
+    - Target SDK updated to meet Play Store requirements.
+
+    **Monitoring:**
+    - Firebase Crashlytics (or equivalent) integrated and verified.
+    - Firebase Analytics or equivalent event tracking in place.
+    - Remote config defaults set for any feature flags.
+  </Accordion>
+
+</AccordionGroup>

@@ -1,0 +1,441 @@
+---
+title: "Java Concurrency"
+description: "Concurrency concepts for Android interviews: synchronization, threading, thread pools, volatile, atomic operations, and the Android threading model."
+keywords: ["java concurrency", "synchronized", "volatile", "thread", "threadpool", "handler", "looper", "android interview"]
+---
+
+<AccordionGroup>
+
+<Accordion title="What does the synchronized keyword mean?">
+
+`synchronized` ensures that only **one thread at a time** can execute the marked method or block. It prevents race conditions when multiple threads access shared mutable state.
+
+```java
+class Counter {
+    private int count = 0;
+
+    // Synchronized instance method — lock is on `this`
+    public synchronized void increment() {
+        count++;
+    }
+
+    // Synchronized block — finer-grained locking
+    public void decrement() {
+        synchronized (this) {
+            count--;
+        }
+    }
+
+    // Synchronized static method — lock is on the Class object
+    public static synchronized void staticIncrement() { /* ... */ }
+}
+```
+
+Every object in Java has a built-in **monitor lock** (intrinsic lock). When a thread acquires the lock, all other threads attempting to enter a `synchronized` block on the same object are blocked until the first thread releases the lock.
+
+Use `synchronized` when multiple threads write to shared state. Avoid holding locks for long operations (I/O, network) to prevent contention.
+</Accordion>
+
+<Accordion title="What is the volatile modifier?">
+
+The `volatile` keyword guarantees two things:
+
+1. **Visibility**: writes to a `volatile` variable are immediately visible to all threads. Without `volatile`, threads may cache variable values in CPU registers or caches, causing stale reads.
+2. **Ordering**: prevents instruction reordering by the JIT compiler around reads and writes to the variable.
+
+```java
+class SharedFlag {
+    private volatile boolean running = true;
+
+    void stop() {
+        running = false; // visible to all threads immediately
+    }
+
+    void work() {
+        while (running) { // always reads latest value from main memory
+            doWork();
+        }
+    }
+}
+```
+
+<Note>
+`volatile` does not provide atomicity for compound operations like `count++` (read-modify-write). Use `synchronized` or `AtomicInteger` for those.
+</Note>
+
+Typical use cases:
+- A flag checked by one thread and set by another.
+- Double-checked locking pattern for singleton initialization.
+
+```java
+// Double-checked locking
+class Singleton {
+    private static volatile Singleton instance;
+    static Singleton getInstance() {
+        if (instance == null) {
+            synchronized (Singleton.class) {
+                if (instance == null) instance = new Singleton();
+            }
+        }
+        return instance;
+    }
+}
+```
+</Accordion>
+
+<Accordion title="What is the difference between Object Level Lock and Class Level Lock?">
+
+**Object Level Lock** — acquired on an **instance** of a class. It protects instance-level state.
+
+```java
+class ObjectLockExample {
+    public synchronized void instanceMethod() {
+        // lock on `this` (the specific instance)
+    }
+
+    public void explicitLock() {
+        synchronized (this) { /* ... */ }
+    }
+}
+
+ObjectLockExample a = new ObjectLockExample();
+ObjectLockExample b = new ObjectLockExample();
+// Thread 1 locking on `a` does NOT block Thread 2 from locking on `b`
+```
+
+**Class Level Lock** — acquired on the **`Class` object** (one per class in the JVM). It protects static state and ensures only one thread executes across all instances.
+
+```java
+class ClassLockExample {
+    public static synchronized void staticMethod() {
+        // lock on ClassLockExample.class
+    }
+
+    public void explicitClassLock() {
+        synchronized (ClassLockExample.class) { /* ... */ }
+    }
+}
+// Thread 1 calling staticMethod() blocks Thread 2 from calling it,
+// regardless of which instance they hold.
+```
+
+Use object level locks for per-instance data, and class level locks for shared static data.
+</Accordion>
+
+<Accordion title="What is ThreadPoolExecutor and how is it configured?">
+
+`ThreadPoolExecutor` manages a pool of worker threads to execute submitted tasks. Rather than creating a new thread for every task (expensive), it reuses threads and queues excess work.
+
+**Key configuration parameters**:
+
+| Parameter | Description |
+|---|---|
+| `corePoolSize` | Number of threads kept alive even when idle |
+| `maximumPoolSize` | Maximum number of threads allowed |
+| `keepAliveTime` | How long idle threads above `corePoolSize` wait before termination |
+| `unit` | Time unit for `keepAliveTime` |
+| `workQueue` | Queue holding tasks waiting for a thread (`LinkedBlockingQueue`, `SynchronousQueue`, etc.) |
+| `threadFactory` | Factory for creating new threads |
+| `handler` | Policy when the queue is full (`AbortPolicy`, `CallerRunsPolicy`, etc.) |
+
+```java
+ThreadPoolExecutor executor = new ThreadPoolExecutor(
+    2,                        // corePoolSize
+    4,                        // maximumPoolSize
+    60, TimeUnit.SECONDS,     // keepAliveTime + unit
+    new LinkedBlockingQueue<>(100), // workQueue (capacity 100)
+    Executors.defaultThreadFactory(),
+    new ThreadPoolExecutor.AbortPolicy()
+);
+
+executor.execute(() -> {
+    Log.d("TAG", "Task running on thread: " + Thread.currentThread().getName());
+});
+
+executor.shutdown(); // graceful shutdown (waits for running tasks)
+```
+
+**How it works**:
+1. If active threads < `corePoolSize`, start a new thread.
+2. If `corePoolSize` is reached, add task to the queue.
+3. If queue is full and active threads < `maximumPoolSize`, start a new thread.
+4. If `maximumPoolSize` is reached and queue is full, apply the rejection handler.
+
+In Android, prefer Kotlin Coroutines or `ExecutorService` wrappers from `Executors` factory for most cases.
+</Accordion>
+
+<Accordion title="What is the difference between Concurrency and Parallelism?">
+
+**Concurrency** — dealing with multiple tasks that are **in progress at the same time**, but not necessarily executing at the exact same instant. A single-core CPU can be concurrent by rapidly switching between tasks (context switching).
+
+**Parallelism** — tasks actually **execute simultaneously** on multiple CPU cores at the same physical moment.
+
+```
+Concurrency (single core):
+Thread A: ----run----| wait |----run----|
+Thread B:            |--run--|          |--run--|
+Time:     ================================>
+
+Parallelism (multi-core):
+Core 1: Thread A =============================>
+Core 2: Thread B =============================>
+Time:   ================================>
+```
+
+A system can be:
+- Concurrent but not parallel (single-core multitasking).
+- Parallel but not concurrent (batch jobs on separate cores with no interleaving).
+- Both concurrent and parallel (multi-core with many interleaved tasks).
+
+In Android, coroutines provide concurrency on a thread pool. `Dispatchers.Default` uses parallel execution across CPU cores for CPU-bound work.
+</Accordion>
+
+<Accordion title="What are the methods in the java.util.concurrent.atomic package?">
+
+The `atomic` package provides lock-free, thread-safe operations on single variables (e.g., `AtomicInteger`, `AtomicBoolean`, `AtomicReference`). They use **CAS (Compare-And-Swap)** hardware instructions internally.
+
+| Method | Description |
+|---|---|
+| `get()` | Returns the current value |
+| `set(value)` | Sets to the given value (guarantees visibility, like `volatile` write) |
+| `lazySet(value)` | Sets the value eventually; allows reordering, lower-cost than `set()` |
+| `compareAndSet(expect, update)` | Atomically sets to `update` if current value equals `expect`; returns `true` on success |
+| `weakCompareAndSet(expect, update)` | Like `compareAndSet` but may fail spuriously; suitable for retry loops |
+
+```java
+AtomicInteger counter = new AtomicInteger(0);
+
+// Thread-safe increment without synchronized
+int value = counter.incrementAndGet(); // returns new value
+
+// Compare-and-swap
+boolean updated = counter.compareAndSet(1, 42);
+// If counter == 1, set to 42 and return true; otherwise false
+
+// lazySet: useful as a store-release for performance
+counter.lazySet(0); // eventually visible, cheaper than set()
+```
+
+Use atomic classes instead of `synchronized` for simple counter or flag operations — they are faster due to non-blocking CAS.
+</Accordion>
+
+<Accordion title="How does the Garbage Collector work in Java/Android?">
+
+The Garbage Collector (GC) automatically reclaims memory occupied by objects that are no longer **reachable** from any live thread or GC root (static fields, local variables on the stack, JNI references).
+
+**How it works**:
+1. **Mark phase**: starting from GC roots, traverse the object graph and mark all reachable objects.
+2. **Sweep phase**: reclaim memory from all unmarked (unreachable) objects.
+3. **Compact phase** (optional): defragment the heap to reduce fragmentation.
+
+**Types of GC in Android (ART)**:
+- **Minor GC** (Young generation collection): collects short-lived objects allocated in the "young" heap. Fast and frequent.
+- **Major GC** (Full collection): collects the entire heap including long-lived objects. Slower; can cause visible pauses.
+
+```java
+// You can request GC but the JVM/ART decides when to run it
+System.gc(); // hint only — not guaranteed to run immediately
+```
+
+<Note>
+Forcing GC is generally not recommended. Trust the runtime to manage memory. Focus on eliminating memory leaks instead.
+</Note>
+
+**Reducing GC pressure in Android**:
+- Avoid allocating objects inside `onDraw()` or tight loops.
+- Use object pools for frequently created/destroyed objects.
+- Use `SparseArray`/`ArrayMap` instead of `HashMap` for small maps.
+</Accordion>
+
+<Accordion title="What is the difference between a Memory Leak and an Out of Memory Error?">
+
+**Memory Leak**: an object is no longer needed by the application but is still referenced somewhere, preventing the GC from collecting it. Over time, leaked objects accumulate and consume heap space.
+
+Common causes in Android:
+- Holding a reference to an `Activity` or `Context` in a static field.
+- Non-static inner classes (anonymous classes, `Handler` subclasses) that implicitly hold a reference to the outer `Activity`.
+- Unregistered listeners or callbacks.
+
+```java
+// Leak: static reference to Activity
+class Singleton {
+    private static Context context; // NEVER do this with Activity context
+    static void init(Context ctx) { context = ctx; } // leaks Activity
+}
+
+// Fix: use application context
+static void init(Context ctx) { context = ctx.getApplicationContext(); }
+```
+
+**Out of Memory (OOM) Error**: the JVM/ART cannot allocate a new object because there is no more available heap memory. This is often the **result** of a memory leak (or genuinely large allocations like high-resolution bitmaps).
+
+```
+// OOM is an Error, not an Exception
+java.lang.OutOfMemoryError: Failed to allocate a 10485760 byte allocation
+```
+
+**Tools**:
+- **LeakCanary**: automatically detects and reports memory leaks in debug builds.
+- **Android Studio Memory Profiler**: visualize allocations and heap dumps.
+- **Heap Dump**: snapshot of all objects in memory at a point in time.
+</Accordion>
+
+<Accordion title="What is the difference between Runnable and Thread?">
+
+**`Runnable`** is a functional interface with a single `run()` method. It represents a task — what to do — but has no thread lifecycle methods.
+
+**`Thread`** is a class that represents an OS thread. It extends `Runnable` and provides lifecycle control: `start()`, `sleep()`, `interrupt()`, `join()`, etc.
+
+```java
+// Runnable — only defines the task
+Runnable task = () -> System.out.println("Task: " + Thread.currentThread().getName());
+
+// Thread — wraps the task in an actual OS thread
+Thread thread = new Thread(task);
+thread.start();
+
+// Extending Thread directly (less flexible — cannot extend another class)
+class MyThread extends Thread {
+    @Override public void run() { System.out.println("Running"); }
+}
+new MyThread().start();
+```
+
+**Prefer `Runnable`** (or `Callable`) over extending `Thread` because:
+- Java supports only single inheritance; extending `Thread` uses up your one superclass slot.
+- `Runnable` tasks can be submitted to `ExecutorService`/`ThreadPoolExecutor`, coroutines, etc.
+- Separation of concerns: the task (`Runnable`) is decoupled from the execution mechanism.
+</Accordion>
+
+<Accordion title="What is the difference between Daemon and User threads?">
+
+**User threads** (non-daemon): the JVM waits for all user threads to finish before shutting down. The main thread is a user thread.
+
+**Daemon threads**: background service threads (e.g., the GC thread). The JVM does **not** wait for daemon threads; when all user threads finish, the JVM exits and all daemon threads are killed immediately.
+
+```java
+Thread daemonThread = new Thread(() -> {
+    while (true) {
+        System.out.println("Daemon working...");
+        Thread.sleep(500);
+    }
+});
+daemonThread.setDaemon(true); // must be set BEFORE start()
+daemonThread.start();
+
+// JVM exits when main thread finishes, even if daemonThread is still running
+System.out.println("Main thread done");
+```
+
+Use daemon threads for:
+- Background tasks that should not prevent the app from exiting (log flushing, cache maintenance).
+- Tasks that are only useful while the main program is running.
+
+<Warning>
+Do not use daemon threads for tasks that must complete (e.g., writing to a database). The JVM may kill them mid-operation.
+</Warning>
+</Accordion>
+
+<Accordion title="How do Looper, Handler, and HandlerThread work in Android?">
+
+Android's UI toolkit is **not thread-safe** — UI updates must happen on the main thread. `Looper`, `Handler`, and `HandlerThread` form the Android message-passing system for safe cross-thread communication.
+
+**Looper**: keeps a thread alive by running a message loop. The main thread has a `Looper` by default (`Looper.getMainLooper()`). Worker threads do not have a `Looper` unless you create one.
+
+**Handler**: tied to a specific `Looper`. It sends `Message`s or `Runnable`s to the `Looper`'s `MessageQueue`. The `Looper` dispatches them back to the `Handler` on its thread.
+
+**HandlerThread**: a `Thread` subclass that sets up a `Looper` automatically.
+
+```java
+// Post work to the main thread from a background thread
+Handler mainHandler = new Handler(Looper.getMainLooper());
+mainHandler.post(() -> textView.setText("Updated on main thread"));
+
+// HandlerThread: a background thread with its own Looper
+HandlerThread handlerThread = new HandlerThread("BackgroundWorker");
+handlerThread.start();
+Handler backgroundHandler = new Handler(handlerThread.getLooper());
+
+backgroundHandler.post(() -> {
+    // runs on handlerThread, NOT the main thread
+    String data = fetchFromNetwork();
+    mainHandler.post(() -> textView.setText(data)); // back to main
+});
+
+// Clean up when done
+handlerThread.quit(); // or quitSafely() to process remaining messages
+```
+
+In modern Android, `Kotlin Coroutines` with `Dispatchers.Main` replace most `Handler`/`Looper` patterns and are less error-prone.
+</Accordion>
+
+<Accordion title="What is a Monitor in Java, and how does it relate to synchronization?">
+
+A **monitor** is an object-level synchronization construct. In Java, every object implicitly has a monitor. A monitor has:
+
+- A **mutex** (mutual exclusion lock): only one thread can hold it at a time.
+- A **wait set**: threads waiting to be notified.
+
+When a thread enters a `synchronized` block, it acquires the object's monitor lock. Other threads wanting the same lock are blocked until the holder releases it (exits the `synchronized` block or calls `wait()`).
+
+```java
+class SharedBuffer {
+    private final Queue<Integer> buffer = new LinkedList<>();
+    private final int capacity = 10;
+
+    public synchronized void produce(int item) throws InterruptedException {
+        while (buffer.size() == capacity) {
+            wait(); // releases lock and waits in wait set
+        }
+        buffer.add(item);
+        notifyAll(); // wakes all threads waiting on this monitor
+    }
+
+    public synchronized int consume() throws InterruptedException {
+        while (buffer.isEmpty()) {
+            wait();
+        }
+        int item = buffer.poll();
+        notifyAll();
+        return item;
+    }
+}
+```
+
+- `wait()` — releases the monitor lock and suspends the thread until `notify()`/`notifyAll()` is called.
+- `notify()` — wakes one arbitrary waiting thread.
+- `notifyAll()` — wakes all waiting threads (safer; prefer this).
+
+These methods must be called from inside a `synchronized` block on the same object, otherwise `IllegalMonitorStateException` is thrown.
+</Accordion>
+
+<Accordion title="What is the difference between Thread.sleep() and delay() in Kotlin?">
+
+**`Thread.sleep(millis)`** — a Java/JVM call that **blocks the OS thread** for the specified duration. The thread cannot do anything else while sleeping. If called on the main thread, it freezes the UI.
+
+```java
+// Java — blocks the thread
+Thread.sleep(1000); // this thread does NOTHING for 1 second
+```
+
+**`delay(millis)`** — a Kotlin Coroutines **suspend function**. It **suspends the coroutine** without blocking the underlying thread. The thread is released and can run other coroutines during the delay.
+
+```kotlin
+// Kotlin — suspends coroutine, thread is free
+viewModelScope.launch {
+    delay(1000) // suspends here, NOT blocking the thread
+    updateUI()
+}
+```
+
+| Aspect | `Thread.sleep()` | `delay()` |
+|---|---|---|
+| Blocks thread | Yes | No |
+| Context | Any Java code | Coroutine scope only |
+| Cancellable | No (only via `interrupt()`) | Yes (cooperatively cancellable) |
+| Main thread safe | No | Yes (with `Dispatchers.Main`) |
+
+Always prefer `delay()` in coroutines; never call `Thread.sleep()` on the main thread.
+</Accordion>
+
+</AccordionGroup>

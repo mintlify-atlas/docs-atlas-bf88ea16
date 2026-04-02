@@ -1,0 +1,596 @@
+---
+title: "Android Architecture"
+description: "Common Android architecture patterns and principles tested in interviews: MVVM, MVC, MVP, MVI, Clean Architecture, multi-module, and the Repository pattern."
+keywords: ["android architecture", "MVVM", "MVI", "clean architecture", "multi-module", "repository pattern", "interview"]
+---
+
+Understanding architectural patterns is essential for senior Android interviews. Interviewers expect you to explain the trade-offs between patterns, describe how data flows through layers, and justify the decisions made on real projects.
+
+## Core concepts
+
+<AccordionGroup>
+
+<Accordion title="What is MVVM and how does data flow through it?">
+
+MVVM stands for **Model–View–ViewModel**. It separates the UI (View) from the business logic and state (ViewModel) and the data layer (Model).
+
+**Layers:**
+
+- **Model** — data sources, repositories, and domain logic. It is unaware of the UI.
+- **View** — `Activity`, `Fragment`, or a Composable. Observes the ViewModel for state changes and forwards user events to it.
+- **ViewModel** — holds and exposes UI state, typically via `StateFlow` or `LiveData`. It survives configuration changes.
+
+**Data flow:**
+
+1. The View subscribes to state exposed by the ViewModel.
+2. The user performs an action → the View calls a method on the ViewModel.
+3. The ViewModel communicates with the Model (repository) to fetch or persist data.
+4. The ViewModel updates its state; the View re-renders reactively.
+
+```kotlin
+// Model layer – Repository
+class UserRepository(private val api: UserApi) {
+    suspend fun getUser(id: String): User = api.fetchUser(id)
+}
+
+// ViewModel layer
+class UserViewModel(private val repository: UserRepository) : ViewModel() {
+
+    private val _uiState = MutableStateFlow<UserUiState>(UserUiState.Loading)
+    val uiState: StateFlow<UserUiState> = _uiState.asStateFlow()
+
+    fun loadUser(id: String) {
+        viewModelScope.launch {
+            _uiState.value = UserUiState.Loading
+            try {
+                val user = repository.getUser(id)
+                _uiState.value = UserUiState.Success(user)
+            } catch (e: Exception) {
+                _uiState.value = UserUiState.Error(e.message ?: "Unknown error")
+            }
+        }
+    }
+}
+
+sealed class UserUiState {
+    object Loading : UserUiState()
+    data class Success(val user: User) : UserUiState()
+    data class Error(val message: String) : UserUiState()
+}
+
+// View layer – Fragment
+class UserFragment : Fragment() {
+
+    private val viewModel: UserViewModel by viewModels()
+
+    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+        super.onViewCreated(view, savedInstanceState)
+        viewLifecycleOwner.lifecycleScope.launch {
+            viewModel.uiState.collect { state ->
+                when (state) {
+                    is UserUiState.Loading -> showLoading()
+                    is UserUiState.Success -> showUser(state.user)
+                    is UserUiState.Error   -> showError(state.message)
+                }
+            }
+        }
+        viewModel.loadUser("42")
+    }
+}
+```
+
+**Why use MVVM?**
+
+- The ViewModel survives rotation — no data re-fetch on screen rotate.
+- The View contains no business logic, making it straightforward to test the ViewModel in isolation.
+- `StateFlow`/`LiveData` make the UI automatically consistent with the data layer.
+
+</Accordion>
+
+<Accordion title="How do MVC, MVP, and MVVM compare?">
+
+<Tabs>
+  <Tab title="MVC">
+
+**Model–View–Controller**
+
+- **Model** — data and business logic.
+- **View** — XML layouts; renders data.
+- **Controller** — `Activity`/`Fragment` handles user input and coordinates Model and View.
+
+**Problems in Android:** The `Activity` ends up acting as both Controller and View, leading to "God Activity" syndrome. The View and Controller are tightly coupled, making unit testing difficult.
+
+```kotlin
+// Android MVC — Activity is the Controller
+class LoginActivity : AppCompatActivity() {
+
+    private val userModel = UserModel()
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContentView(R.layout.activity_login)
+
+        btnLogin.setOnClickListener {
+            // Controller logic lives inside the View (Activity)
+            val user = userModel.login(etUsername.text.toString())
+            tvResult.text = user.name
+        }
+    }
+}
+```
+
+  </Tab>
+  <Tab title="MVP">
+
+**Model–View–Presenter**
+
+- **Model** — data sources and business logic.
+- **View** — `Activity`/`Fragment` implements a `View` interface; purely renders UI.
+- **Presenter** — plain Kotlin/Java class; holds all UI logic; communicates with Model and calls methods on the View interface.
+
+**Improvement over MVC:** The Presenter is a pure class with no Android dependencies, making it fully unit-testable. The View interface allows easy mocking.
+
+**Problem:** Boilerplate. Each screen needs a View interface, a Presenter interface, and a concrete implementation.
+
+```kotlin
+// MVP Contract
+interface LoginContract {
+    interface View {
+        fun showUserName(name: String)
+        fun showError(message: String)
+    }
+    interface Presenter {
+        fun onLoginClicked(username: String)
+    }
+}
+
+// Presenter (no Android imports needed)
+class LoginPresenter(
+    private val view: LoginContract.View,
+    private val model: UserModel
+) : LoginContract.Presenter {
+    override fun onLoginClicked(username: String) {
+        val user = model.login(username)
+        if (user != null) view.showUserName(user.name)
+        else view.showError("Login failed")
+    }
+}
+
+// View (Activity)
+class LoginActivity : AppCompatActivity(), LoginContract.View {
+    private lateinit var presenter: LoginContract.Presenter
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        presenter = LoginPresenter(this, UserModel())
+        btnLogin.setOnClickListener {
+            presenter.onLoginClicked(etUsername.text.toString())
+        }
+    }
+
+    override fun showUserName(name: String) { tvResult.text = name }
+    override fun showError(message: String) { Toast.makeText(this, message, Toast.LENGTH_SHORT).show() }
+}
+```
+
+  </Tab>
+  <Tab title="MVVM">
+
+**Model–View–ViewModel**
+
+- **Model** — repositories and data sources.
+- **View** — `Activity`/`Fragment`/`Composable`; observes ViewModel state.
+- **ViewModel** — survives configuration changes; exposes `StateFlow`/`LiveData`; has no direct View reference.
+
+**Improvement over MVP:** No View interface needed. The ViewModel is completely decoupled from the View — it never holds a reference to it. Android Jetpack `ViewModel` handles lifecycle automatically.
+
+```kotlin
+// ViewModel
+class LoginViewModel(private val model: UserModel) : ViewModel() {
+    private val _loginState = MutableStateFlow<LoginState>(LoginState.Idle)
+    val loginState: StateFlow<LoginState> = _loginState.asStateFlow()
+
+    fun login(username: String) {
+        viewModelScope.launch {
+            val user = model.login(username)
+            _loginState.value = if (user != null)
+                LoginState.Success(user.name)
+            else
+                LoginState.Error("Login failed")
+        }
+    }
+}
+
+// View collects from StateFlow — no reference held by ViewModel
+lifecycleScope.launch {
+    viewModel.loginState.collect { state -> render(state) }
+}
+```
+
+  </Tab>
+</Tabs>
+
+| Aspect | MVC | MVP | MVVM |
+|---|---|---|---|
+| View coupling | Tight | Loose (via interface) | None (observes state) |
+| Testability | Low | High | High |
+| Boilerplate | Low | High | Medium |
+| Lifecycle handling | Manual | Manual | Built-in (`ViewModel`) |
+| Recommended for Android | No | Possible | Yes (Google-recommended) |
+
+</Accordion>
+
+<Accordion title="What is MVI (Model-View-Intent) and when would you use it?">
+
+MVI enforces **unidirectional data flow** in a strict cycle:
+
+```
+User action → Intent → Model (reducer) → State → View → (repeat)
+```
+
+- **Model** — an immutable state object describing the entire screen at a point in time.
+- **View** — renders the state and emits intents (user actions).
+- **Intent** — a sealed class representing a user action or event.
+
+The key constraint is that state is **immutable** and can only be produced by a **pure reducer** function `(State, Intent) -> State`. This makes every state transition traceable and easy to test.
+
+```kotlin
+// Intent — user actions
+sealed class LoginIntent {
+    data class EnterUsername(val username: String) : LoginIntent()
+    object SubmitLogin : LoginIntent()
+}
+
+// State — immutable snapshot
+data class LoginState(
+    val username: String = "",
+    val isLoading: Boolean = false,
+    val error: String? = null,
+    val isLoggedIn: Boolean = false
+)
+
+// ViewModel acting as reducer
+class LoginViewModel : ViewModel() {
+
+    private val _state = MutableStateFlow(LoginState())
+    val state: StateFlow<LoginState> = _state.asStateFlow()
+
+    fun processIntent(intent: LoginIntent) {
+        when (intent) {
+            is LoginIntent.EnterUsername -> {
+                _state.update { it.copy(username = intent.username) }
+            }
+            is LoginIntent.SubmitLogin -> {
+                _state.update { it.copy(isLoading = true, error = null) }
+                viewModelScope.launch {
+                    // perform login...
+                }
+            }
+        }
+    }
+}
+```
+
+**When to choose MVI:**
+
+- Complex screens with many possible states.
+- When you need full auditability of state transitions (debugging, time-travel).
+- Teams that prefer strict discipline around state mutation.
+
+**Trade-offs:** More boilerplate than MVVM for simple screens. Every user action requires a dedicated `Intent` subclass.
+
+</Accordion>
+
+<Accordion title="What is Clean Architecture and how does it apply to Android?">
+
+Clean Architecture, introduced by Robert C. Martin, organizes code into concentric layers where **dependencies always point inward**. Outer layers know about inner layers; inner layers know nothing about the outer layers.
+
+**Layers in an Android project:**
+
+```
+┌──────────────────────────────┐
+│  Presentation (UI layer)     │  ← ViewModels, Activities, Fragments
+├──────────────────────────────┤
+│  Domain layer                │  ← Use Cases, Domain Models, Repository interfaces
+├──────────────────────────────┤
+│  Data layer                  │  ← Repository implementations, API, DB, DTOs
+└──────────────────────────────┘
+```
+
+- **Data layer** — knows everything about how to fetch and persist data (Retrofit, Room, SharedPreferences). Contains `RepositoryImpl`.
+- **Domain layer** — has zero Android dependencies. Contains plain Kotlin interfaces (`UserRepository`), domain models (`User`), and use cases (`GetUserUseCase`).
+- **Presentation layer** — depends on the domain layer; holds `ViewModel` and UI.
+
+**The dependency rule:** a class in the presentation layer may depend on domain, but the domain layer never imports anything from the presentation or data layers.
+
+```kotlin
+// Domain layer — pure Kotlin, no Android dependencies
+data class User(val id: String, val name: String)
+
+interface UserRepository {
+    suspend fun getUser(id: String): User
+}
+
+class GetUserUseCase(private val repository: UserRepository) {
+    suspend operator fun invoke(id: String): User = repository.getUser(id)
+}
+
+// Data layer — implements domain interface
+class UserRepositoryImpl(
+    private val api: UserApi,
+    private val dao: UserDao
+) : UserRepository {
+    override suspend fun getUser(id: String): User {
+        return try {
+            val dto = api.fetchUser(id)
+            dto.toDomain().also { dao.insert(it.toEntity()) }
+        } catch (e: IOException) {
+            dao.getUser(id)?.toDomain() ?: throw e
+        }
+    }
+}
+
+// Presentation layer — depends only on domain use case
+class UserViewModel(private val getUser: GetUserUseCase) : ViewModel() {
+    fun load(id: String) {
+        viewModelScope.launch {
+            val user = getUser(id)
+            // update UI state
+        }
+    }
+}
+```
+
+**Benefits:**
+
+- Domain logic is framework-independent and fully testable.
+- You can swap the data layer (e.g., replace Retrofit with a GraphQL client) without touching the domain or presentation layers.
+- Clear boundaries make it easier to onboard new developers.
+
+</Accordion>
+
+<Accordion title="What is Multi-Module Architecture? When and why should you use it?">
+
+A multi-module Android project splits the codebase into independent Gradle modules instead of keeping everything in a single `:app` module.
+
+**Types of modules:**
+
+- **App module (`:app`)** — the entry point; depends on feature modules.
+- **Feature modules (`:feature:login`, `:feature:profile`)** — contain everything for a specific feature: UI, ViewModel, use cases.
+- **Library modules (`:core:network`, `:core:database`, `:core:ui`)** — shared utilities with no feature-specific logic.
+
+**Benefits:**
+
+- **Faster builds** — Gradle only recompiles modules that changed.
+- **Enforced boundaries** — a feature module cannot directly import internals of another feature module; communication goes through a shared API module.
+- **Parallel builds** — independent modules compile in parallel.
+- **Dynamic delivery** — feature modules can be delivered on demand via Play Feature Delivery.
+- **Code ownership** — teams own individual modules.
+
+**When to use it:**
+
+- Large teams where multiple developers work on different features simultaneously.
+- Apps with optional or on-demand features.
+- Codebases where build times have become a bottleneck.
+
+**When it may be overkill:**
+
+- Small apps or solo projects where the overhead of managing module dependencies outweighs the benefits.
+
+```
+:app
+  └── depends on :feature:home, :feature:profile
+:feature:home
+  └── depends on :core:network, :core:ui
+:feature:profile
+  └── depends on :core:network, :core:ui
+:core:network
+:core:ui
+:core:database
+```
+
+</Accordion>
+
+<Accordion title="What is the difference between Software Architecture and Software Design?">
+
+These terms are often used interchangeably but refer to different levels of abstraction.
+
+**Software Architecture** describes the **high-level structure** of the system: how major components are organized, how they communicate, and what principles govern their relationships.
+
+Examples: MVVM, Clean Architecture, microservices, event-driven architecture.
+
+**Software Design** describes the **low-level details** of individual components: class structure, method signatures, algorithm choices, and design patterns applied within a single module.
+
+Examples: using the Builder pattern for configuration objects, applying the Strategy pattern for payment processing, choosing a specific data structure.
+
+**Analogy:** Architecture is the blueprint of a building (placement of walls, floors, and structural elements). Design is the detail work — where the sockets go, what kind of hinges the doors use.
+
+In an interview, if asked "describe your app's architecture", talk about layers, how data flows between them, and why you made those choices. If asked about design, describe class hierarchies and patterns within a specific component.
+
+</Accordion>
+
+<Accordion title="What is the Repository pattern?">
+
+The Repository pattern provides a **clean abstraction over data sources**. The rest of the app (ViewModel, use cases) interacts with a `Repository` interface and never knows whether data comes from a network API, local database, or cache.
+
+**Key responsibilities:**
+
+- Decide which source to read from (network vs. cache).
+- Perform data mapping between DTOs (data transfer objects) and domain models.
+- Handle error recovery (e.g., fall back to cache on network failure).
+
+```kotlin
+interface ArticleRepository {
+    suspend fun getArticles(): List<Article>
+    suspend fun getArticle(id: String): Article
+}
+
+class ArticleRepositoryImpl(
+    private val remoteDataSource: ArticleRemoteDataSource,
+    private val localDataSource: ArticleLocalDataSource
+) : ArticleRepository {
+
+    override suspend fun getArticles(): List<Article> {
+        return try {
+            val articles = remoteDataSource.fetchArticles()
+            localDataSource.saveArticles(articles)
+            articles
+        } catch (e: IOException) {
+            // Network unavailable — return cached data
+            localDataSource.getArticles()
+        }
+    }
+
+    override suspend fun getArticle(id: String): Article {
+        return localDataSource.getArticle(id)
+            ?: remoteDataSource.fetchArticle(id).also { localDataSource.save(it) }
+    }
+}
+```
+
+The ViewModel or use case only ever sees the `ArticleRepository` interface, making it trivial to swap implementations in tests using a `FakeArticleRepository`.
+
+</Accordion>
+
+<Accordion title="How do you describe the architecture of a project in an interview?">
+
+Interviewers ask this to assess how you think about system structure and whether your decisions were deliberate. A strong answer covers:
+
+1. **Pattern chosen and why** — "We used MVVM with Clean Architecture because we had three feature teams and needed clear ownership boundaries."
+2. **Layers and their responsibilities** — presentation, domain, data; what lives where.
+3. **Data flow** — how a user action travels from the UI through to the data layer and back.
+4. **Technology choices** — ViewModel + StateFlow, Hilt for DI, Retrofit + Room for data.
+5. **Trade-offs acknowledged** — "Clean Architecture added boilerplate but made the domain logic easy to unit test."
+6. **What you'd do differently** — shows reflection and growth.
+
+**Example answer structure:**
+
+"The app followed Clean Architecture with MVVM in the presentation layer. We had three layers: data (Retrofit + Room, repository implementations), domain (use cases and repository interfaces — pure Kotlin, no Android dependencies), and presentation (Jetpack ViewModel + StateFlow, Fragments). All dependency injection was handled by Hilt. Data flowed from the UI as events into the ViewModel, through use cases, and into repositories. The separation made it easy to test domain logic without mocking Android classes. The main trade-off was additional interface boilerplate in the domain layer, but it paid off when we replaced our REST API with GraphQL — only the data layer changed."
+
+</Accordion>
+
+<Accordion title="How does StateFlow compare to LiveData in MVVM?">
+
+Both `StateFlow` and `LiveData` expose observable state from a ViewModel. The key differences:
+
+| Feature | LiveData | StateFlow |
+|---|---|---|
+| Android dependency | `androidx.lifecycle` | Kotlin standard library |
+| Null safety | Can emit `null` | Requires non-null type (use `T?` explicitly) |
+| Lifecycle awareness | Built-in | Requires `repeatOnLifecycle` or `flowWithLifecycle` |
+| Initial value required | No | Yes |
+| Coroutine integration | Needs `asFlow()` | Native — is a `Flow` |
+| Testing | Needs `InstantTaskExecutorRule` | Standard coroutine test APIs |
+
+```kotlin
+// LiveData approach
+val user: LiveData<User> = liveData {
+    emit(repository.getUser())
+}
+
+// StateFlow approach
+private val _user = MutableStateFlow<User?>(null)
+val user: StateFlow<User?> = _user.asStateFlow()
+
+init {
+    viewModelScope.launch {
+        _user.value = repository.getUser()
+    }
+}
+```
+
+**Collect StateFlow safely in a Fragment:**
+
+```kotlin
+viewLifecycleOwner.lifecycleScope.launch {
+    viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+        viewModel.user.collect { user ->
+            // safe: only collects when the view is at least STARTED
+        }
+    }
+}
+```
+
+<Tip>
+Prefer `StateFlow` for new code. Google's Architecture Components guidance now recommends it. `LiveData` remains useful when you need tight integration with Data Binding.
+</Tip>
+
+</Accordion>
+
+<Accordion title="What are use cases in Clean Architecture and why do they matter?">
+
+A **use case** (also called an _interactor_) encapsulates a **single business action**. It is a class in the domain layer that coordinates repositories and applies business rules.
+
+**Why use them:**
+
+- They prevent the ViewModel from becoming a dumping ground for business logic.
+- Each use case is independently testable.
+- They express intent clearly: `GetUserUseCase`, `PlaceOrderUseCase`, `LogoutUseCase`.
+
+```kotlin
+// Use case — single responsibility
+class PlaceOrderUseCase(
+    private val orderRepository: OrderRepository,
+    private val inventoryRepository: InventoryRepository,
+    private val notificationService: NotificationService
+) {
+    suspend operator fun invoke(order: Order): Result<OrderConfirmation> {
+        // Business rule: check inventory before placing
+        if (!inventoryRepository.isAvailable(order.items)) {
+            return Result.failure(InsufficientInventoryException())
+        }
+        val confirmation = orderRepository.place(order)
+        notificationService.send(OrderNotification(confirmation))
+        return Result.success(confirmation)
+    }
+}
+
+// ViewModel delegates to use case
+class CheckoutViewModel(private val placeOrder: PlaceOrderUseCase) : ViewModel() {
+    fun checkout(order: Order) {
+        viewModelScope.launch {
+            val result = placeOrder(order)
+            // update state
+        }
+    }
+}
+```
+
+Use cases are most valuable when the same business action is needed from multiple ViewModels or entry points (e.g., placing an order from both the cart screen and a widget).
+
+</Accordion>
+
+<Accordion title="What is the Presentation layer's responsibility in MVVM / Clean Architecture?">
+
+The Presentation layer contains everything directly related to showing data to the user and reacting to user input. Its responsibilities are:
+
+- **UI state management** — the ViewModel holds and exposes state via `StateFlow`/`LiveData`.
+- **UI event handling** — the ViewModel receives events from the View (button clicks, text changes) and translates them into domain calls.
+- **UI mapping** — converting domain models into UI models (e.g., formatting a `Date` to a display string).
+- **Navigation** — triggering navigation events in response to state changes.
+
+**What the Presentation layer must NOT do:**
+
+- Access the network or database directly.
+- Contain business rules (those live in use cases/domain layer).
+- Hold long-lived references to Views (Activities/Fragments) — this causes memory leaks.
+
+```kotlin
+// UI model — presentation-layer specific
+data class UserUiModel(
+    val displayName: String,        // "John Doe"
+    val joinedDate: String,         // "Member since Jan 2023"
+    val avatarUrl: String
+)
+
+// Mapper in presentation layer
+fun User.toUiModel(): UserUiModel = UserUiModel(
+    displayName = "${firstName} ${lastName}",
+    joinedDate = "Member since ${createdAt.format(dateFormatter)}",
+    avatarUrl = profileImageUrl
+)
+```
+
+</Accordion>
+
+</AccordionGroup>

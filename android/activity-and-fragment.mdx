@@ -1,0 +1,430 @@
+---
+title: "Activity and Fragment"
+description: "Interview questions on Activity lifecycle, Fragment lifecycle, launch modes, back stack, and Fragment-Activity communication."
+keywords: ["android", "activity lifecycle", "fragment lifecycle", "launchMode", "backstack", "onSaveInstanceState", "FragmentPagerAdapter", "singleTask", "singleTop", "Bundle", "retained fragment"]
+---
+
+Activities and Fragments are the primary UI building blocks in Android. Understanding their lifecycles and how they interact is essential for every Android interview.
+
+## Activity lifecycle
+
+<AccordionGroup>
+  <Accordion title="What is the Activity lifecycle?">
+    The Activity lifecycle defines the states an Activity moves through from creation to destruction. The Android system calls specific callback methods as the Activity transitions between states.
+
+    **Lifecycle state diagram (text description):**
+
+    ```
+    [Not created]
+         |
+      onCreate()
+         |
+      onStart()       ◄─── onRestart() ◄──┐
+         |                                 │
+      onResume()                           │
+         |                                 │
+    [Running / Visible & Focused]          │
+         |                                 │
+      onPause()                            │
+         |                    ┌────────────┘
+      onStop()  ──────────────┘
+         |
+      onDestroy()
+         |
+    [Destroyed]
+    ```
+
+    | Callback | Description |
+    |---|---|
+    | `onCreate()` | Activity is created. Initialize UI, set content view, restore state. |
+    | `onStart()` | Activity becomes visible to the user (not yet interactive). |
+    | `onResume()` | Activity is in the foreground and the user can interact with it. |
+    | `onPause()` | Activity is partially obscured (e.g., dialog, split-screen). Release resources that should not run when not in focus. |
+    | `onStop()` | Activity is no longer visible. Save persistent data. |
+    | `onRestart()` | Called after `onStop()` when the Activity is coming back to the foreground. |
+    | `onDestroy()` | Activity is being destroyed. Release all resources. |
+
+    <Note>
+      `onPause()` is the last guaranteed callback before the process may be killed. If the system is under memory pressure, the process can be terminated after `onPause()` without calling `onStop()` or `onDestroy()`.
+    </Note>
+  </Accordion>
+
+  <Accordion title="What is the difference between onCreate() and onStart()?">
+    - **`onCreate()`** is called once when the Activity is first created (or recreated after being destroyed). It is where you set up the UI (`setContentView()`), initialize ViewModels, bind data, and restore saved instance state. It receives the `savedInstanceState` Bundle.
+
+    - **`onStart()`** is called every time the Activity becomes visible to the user, including after returning from the background (via `onRestart()` → `onStart()`). The Activity is visible but not yet interactive.
+
+    ```kotlin
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContentView(R.layout.activity_main)
+        // One-time setup: ViewModel init, binding, state restore
+    }
+
+    override fun onStart() {
+        super.onStart()
+        // Called every time the Activity becomes visible
+        // e.g., register location listener, refresh UI data
+    }
+    ```
+
+    **Key difference:** `onCreate()` fires once per Activity instance lifetime; `onStart()` fires every time the Activity becomes visible (potentially multiple times per lifecycle).
+  </Accordion>
+
+  <Accordion title="Why do you call setContentView() in onCreate() and not in onStart()?">
+    `setContentView()` inflates the layout XML and sets the root view hierarchy. It should be called exactly once per Activity instance — calling it multiple times would re-inflate the entire layout, losing all view state and causing flickering.
+
+    `onCreate()` is called once per Activity instance (when first created or recreated), making it the correct place to establish the view hierarchy. `onStart()` can be called multiple times during the Activity's lifetime (every time it returns to the foreground), so inflating the layout there would cause repeated expensive inflation and view-state loss.
+
+    Additionally, many view references (ViewBinding, ViewModel observers) set up in `onCreate()` depend on the view hierarchy being available. Inflating later would break this initialization order.
+  </Accordion>
+
+  <Accordion title="When is onDestroy() called without onPause() and onStop()?">
+    This happens when `finish()` is called inside `onCreate()`. If an Activity calls `finish()` before completing `onCreate()` (e.g., due to a permission check failing or invalid intent data), the system skips `onStart()`, `onResume()`, `onPause()`, and `onStop()` — going directly from `onCreate()` to `onDestroy()`.
+
+    ```kotlin
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+
+        if (!hasRequiredPermission()) {
+            // Activity finishes immediately — only onDestroy() will be called
+            finish()
+            return
+        }
+
+        setContentView(R.layout.activity_main)
+    }
+    ```
+
+    This is an edge case, but it demonstrates why you should not rely on `onPause()`/`onStop()` being called for cleanup if your Activity might finish early.
+  </Accordion>
+
+  <Accordion title="What are onSaveInstanceState() and onRestoreInstanceState()?">
+    These callbacks allow you to save and restore transient UI state across Activity recreation events such as screen rotation, language change, or the system killing the process.
+
+    **`onSaveInstanceState(outState: Bundle)`** — called before the Activity may be destroyed. Store lightweight UI state (scroll position, selected tab, user input) into the Bundle.
+
+    **`onRestoreInstanceState(savedInstanceState: Bundle)`** — called after `onStart()` if the Activity was recreated with a non-null saved state. Restore state here or in `onCreate()`.
+
+    ```kotlin
+    private var scrollPosition = 0
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putInt("scroll_position", scrollPosition)
+        outState.putString("user_query", searchEditText.text.toString())
+    }
+
+    override fun onRestoreInstanceState(savedInstanceState: Bundle) {
+        super.onRestoreInstanceState(savedInstanceState)
+        scrollPosition = savedInstanceState.getInt("scroll_position")
+        searchEditText.setText(savedInstanceState.getString("user_query"))
+    }
+
+    // Alternatively, restore in onCreate():
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContentView(R.layout.activity_main)
+        savedInstanceState?.let {
+            scrollPosition = it.getInt("scroll_position")
+        }
+    }
+    ```
+
+    <Warning>
+      Only store small amounts of data in `onSaveInstanceState()`. The Bundle is serialized and has size limits. For large data or complex objects, use `ViewModel` — it survives configuration changes without serialization.
+    </Warning>
+  </Accordion>
+</AccordionGroup>
+
+## Fragment lifecycle
+
+<AccordionGroup>
+  <Accordion title="What is the Fragment lifecycle?">
+    Fragments have a more complex lifecycle than Activities because they are hosted inside an Activity and also have a separate view lifecycle.
+
+    **Fragment lifecycle callbacks (in order):**
+
+    ```
+    onAttach()         → Fragment is attached to the Activity
+    onCreate()         → Fragment is created (no view yet)
+    onCreateView()     → Fragment inflates its view hierarchy
+    onViewCreated()    → View is fully created; bind views here
+    onViewStateRestored() → View state restored from saved state
+    onStart()          → Fragment becomes visible
+    onResume()         → Fragment is interactive
+        [Fragment is active]
+    onPause()          → Fragment loses focus
+    onStop()           → Fragment is no longer visible
+    onSaveInstanceState() → Save view state
+    onDestroyView()    → View hierarchy is destroyed (Fragment instance may survive)
+    onDestroy()        → Fragment instance is destroyed
+    onDetach()         → Fragment is detached from Activity
+    ```
+
+    **View lifecycle vs Fragment lifecycle:** The Fragment's view (`onCreateView` → `onDestroyView`) can be destroyed and re-created multiple times while the Fragment instance remains alive (e.g., when using the back stack). Always observe LiveData using `viewLifecycleOwner`, not `this`, to avoid leaking observers.
+
+    ```kotlin
+    class MyFragment : Fragment(R.layout.fragment_my) {
+
+        override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+            super.onViewCreated(view, savedInstanceState)
+            // Safe to bind views here — view is fully created
+            // Use viewLifecycleOwner for LiveData observers
+            viewModel.data.observe(viewLifecycleOwner) { data ->
+                updateUI(data)
+            }
+        }
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="Why is it recommended to use only the default constructor to create a Fragment?">
+    When the Android system recreates a Fragment (after a process death or configuration change), it calls the Fragment's **no-argument constructor** via reflection. It then restores arguments from the saved Bundle.
+
+    If you create a Fragment using a custom constructor that accepts parameters, those parameters are lost on recreation — the system cannot call your custom constructor. This leads to crashes or incorrect state.
+
+    **The correct approach:** use the default constructor and pass arguments via `Fragment.arguments` (a Bundle):
+
+    ```kotlin
+    class UserDetailFragment : Fragment() {
+
+        companion object {
+            private const val ARG_USER_ID = "user_id"
+
+            // Factory method — preferred way to create a Fragment with args
+            fun newInstance(userId: String): UserDetailFragment {
+                return UserDetailFragment().apply {
+                    arguments = Bundle().apply {
+                        putString(ARG_USER_ID, userId)
+                    }
+                }
+            }
+        }
+
+        override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+            super.onViewCreated(view, savedInstanceState)
+            // Arguments are always available — even after recreation
+            val userId = requireArguments().getString(ARG_USER_ID)
+        }
+    }
+    ```
+
+    The `arguments` Bundle is automatically preserved and restored by the Fragment framework.
+  </Accordion>
+
+  <Accordion title="What is the difference between a Fragment and an Activity?">
+    | Aspect | Activity | Fragment |
+    |---|---|---|
+    | Independent | Yes — can run standalone | No — must be hosted by an Activity |
+    | Lifecycle | Managed by the OS | Managed by the host Activity |
+    | Back stack | Managed by the OS task stack | Managed by `FragmentManager` |
+    | Multiple on screen | No (one per window) | Yes — multiple Fragments can share a screen |
+    | Re-use | Harder | Easy — same Fragment in multiple Activities |
+
+    **Relationship:** An Activity hosts one or more Fragments. The Activity provides the window and system integration; Fragments provide modular, reusable UI sections within that window.
+
+    Fragments were introduced to support tablet UIs where multiple content panes are visible simultaneously (e.g., a list/detail layout).
+  </Accordion>
+
+  <Accordion title="When should you use a Fragment rather than an Activity?">
+    - When you want to display **multiple UI sections simultaneously** on larger screens (e.g., list + detail pane on a tablet)
+    - When you have **UI components shared across multiple screens** — put them in a Fragment and reuse them in different Activities
+    - When you need **modular, replaceable** UI sections within a single screen (tabs, wizard steps)
+    - When using **ViewPager2** — each page is a Fragment
+    - For **navigation** with Jetpack Navigation Component — all destinations are typically Fragments within a single Activity ("single-Activity architecture")
+
+    Modern Android development favors the **single-Activity pattern**: one `MainActivity` with many Fragments, navigated using the Jetpack Navigation Component.
+  </Accordion>
+</AccordionGroup>
+
+## Launch modes and back stack
+
+<AccordionGroup>
+  <Accordion title="What are the Activity launch modes?">
+    Launch modes control how a new instance of an Activity is created and added to the task back stack. Configured in `AndroidManifest.xml` via `android:launchMode`.
+
+    **`standard`** (default) — A new instance is always created and pushed onto the back stack. Multiple instances of the same Activity can coexist in the stack.
+
+    **`singleTop`** — If an instance of the Activity is already at the **top** of the back stack, no new instance is created — instead, `onNewIntent()` is called on the existing instance. If it is not at the top, a new instance is created.
+
+    **`singleTask`** — Only one instance of the Activity can exist in the entire task. If it already exists, the system brings the existing instance to the front (clearing all Activities above it) and calls `onNewIntent()`. Typically used for the app's main entry point.
+
+    **`singleInstance`** — Like `singleTask`, but the Activity is placed in its own exclusive task. No other Activity can be part of this task. Rarely used; typical for apps launched from other apps (e.g., dialer).
+
+    ```xml
+    <activity
+        android:name=".HomeActivity"
+        android:launchMode="singleTask" />
+    ```
+
+    <Tip>
+      You can also specify launch behavior per-intent using flags like `FLAG_ACTIVITY_SINGLE_TOP` or `FLAG_ACTIVITY_CLEAR_TOP`, which override the manifest setting for that specific launch.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="What is the difference between add() and replace() for Fragment transactions?">
+    Both add a Fragment to the container, but they behave differently:
+
+    **`add()`** — Adds the new Fragment **on top** of any existing Fragment in the container. The existing Fragment's view remains in the layout; it is not destroyed. Both Fragments are visible simultaneously if their views overlap.
+
+    **`replace()`** — Removes all existing Fragments from the container and adds the new one. The previous Fragment's `onDestroyView()` is called.
+
+    ```kotlin
+    // add — both fragments coexist
+    supportFragmentManager.beginTransaction()
+        .add(R.id.container, DetailFragment())
+        .addToBackStack("detail")
+        .commit()
+
+    // replace — removes existing fragment, adds new one
+    supportFragmentManager.beginTransaction()
+        .replace(R.id.container, SettingsFragment())
+        .addToBackStack("settings")
+        .commit()
+    ```
+
+    **When to use which:**
+    - Use `add()` for overlapping UI (e.g., a dialog-like Fragment over the current screen)
+    - Use `replace()` for navigation between screens where only one Fragment should be visible at a time
+  </Accordion>
+
+  <Accordion title="What is the purpose of addToBackStack()?">
+    `addToBackStack(name)` adds the Fragment transaction to the Fragment back stack managed by `FragmentManager`. When the user presses the back button, the transaction is reversed — the added Fragment is removed and the previous state is restored.
+
+    Without `addToBackStack()`, the transaction is not reversible via the back button; pressing back would finish the Activity instead.
+
+    ```kotlin
+    supportFragmentManager.beginTransaction()
+        .replace(R.id.container, DetailFragment())
+        .addToBackStack("detail")  // null or a name string
+        .commit()
+
+    // Programmatically pop the back stack
+    supportFragmentManager.popBackStack()
+
+    // Pop to a specific entry
+    supportFragmentManager.popBackStack("detail", FragmentManager.POP_BACK_STACK_INCLUSIVE)
+    ```
+
+    The `name` parameter allows you to pop to a specific point in the back stack using `popBackStack(name, flags)`.
+  </Accordion>
+
+  <Accordion title="What is the difference between FragmentPagerAdapter and FragmentStatePagerAdapter?">
+    Both are used with `ViewPager` (now superseded by `ViewPager2` with `FragmentStateAdapter`), but they handle off-screen Fragments differently:
+
+    **`FragmentPagerAdapter`** — Keeps Fragment **instances** in memory even when they are off-screen. The view is destroyed when the Fragment is not visible, but the Fragment object remains. Better for a small, fixed number of pages.
+
+    **`FragmentStatePagerAdapter`** — **Destroys** the Fragment instance when it moves off-screen, but saves its state via `onSaveInstanceState()`. When the user returns to that page, a new Fragment instance is created and state is restored. Better for large or dynamic page sets — more memory-efficient.
+
+    | | `FragmentPagerAdapter` | `FragmentStatePagerAdapter` |
+    |---|---|---|
+    | Off-screen Fragment | Kept in memory | Destroyed, state saved |
+    | Memory usage | Higher | Lower |
+    | Best for | Few fixed pages | Many or dynamic pages |
+
+    <Note>
+      Both are deprecated. Prefer `ViewPager2` with `FragmentStateAdapter`, which always destroys off-screen Fragments and uses `RecyclerView` internally for better performance.
+    </Note>
+  </Accordion>
+</AccordionGroup>
+
+## Fragment communication and advanced topics
+
+<AccordionGroup>
+  <Accordion title="How do you communicate between two Fragments?">
+    The recommended modern approach is to use a **shared ViewModel** scoped to the Activity (or Navigation graph). Both Fragments observe the same ViewModel, so they automatically stay in sync without direct coupling.
+
+    ```kotlin
+    // Shared ViewModel
+    class SharedViewModel : ViewModel() {
+        private val _selectedItem = MutableStateFlow<Item?>(null)
+        val selectedItem: StateFlow<Item?> = _selectedItem.asStateFlow()
+
+        fun selectItem(item: Item) {
+            _selectedItem.value = item
+        }
+    }
+
+    // Fragment A — produces the selection
+    class ListFragment : Fragment() {
+        private val sharedViewModel: SharedViewModel by activityViewModels()
+
+        fun onItemClicked(item: Item) {
+            sharedViewModel.selectItem(item)
+        }
+    }
+
+    // Fragment B — consumes the selection
+    class DetailFragment : Fragment() {
+        private val sharedViewModel: SharedViewModel by activityViewModels()
+
+        override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+            super.onViewCreated(view, savedInstanceState)
+            viewLifecycleOwner.lifecycleScope.launch {
+                sharedViewModel.selectedItem.collect { item ->
+                    item?.let { showDetail(it) }
+                }
+            }
+        }
+    }
+    ```
+
+    **Other approaches (older patterns):**
+    - Define an interface in the Fragment, implement it in the Activity, and have the Activity relay data to the other Fragment
+    - Use the Fragment Result API (`setFragmentResult` / `setFragmentResultListener`) for one-time results between Fragments
+
+    <Tip>
+      The Fragment Result API is the best choice for simple one-time result passing (similar to `startActivityForResult`). The shared ViewModel is best for ongoing shared state.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="What is a retained Fragment?">
+    A retained Fragment (created by calling `setRetainInstance(true)`) is a Fragment whose instance is preserved across Activity configuration changes (e.g., screen rotation). The Fragment's `onDestroy()` and `onCreate()` are not called during the configuration change — only `onDetach()` and `onAttach()` are.
+
+    ```kotlin
+    class DataFragment : Fragment() {
+        @Suppress("DEPRECATION")
+        override fun onCreate(savedInstanceState: Bundle?) {
+            super.onCreate(savedInstanceState)
+            retainInstance = true // deprecated
+        }
+    }
+    ```
+
+    <Warning>
+      `setRetainInstance(true)` / `retainInstance` is **deprecated** since Fragments 1.3.0. Use `ViewModel` instead — it provides the same benefit (surviving configuration changes) without the Fragment lifecycle complexities and limitations of retained Fragments (e.g., retained Fragments cannot be added to the back stack).
+    </Warning>
+  </Accordion>
+
+  <Accordion title="What is Bundle in Android?">
+    `Bundle` is a key-value mapping that stores typed data. It is the primary mechanism for passing data between Android components (Activities, Fragments) and for saving/restoring instance state.
+
+    ```kotlin
+    // Creating and populating a Bundle
+    val bundle = Bundle().apply {
+        putString("key_name", "Alice")
+        putInt("key_age", 30)
+        putBoolean("key_active", true)
+        putParcelable("key_user", user) // user implements Parcelable
+    }
+
+    // Passing data to an Activity via Intent
+    val intent = Intent(this, DetailActivity::class.java)
+    intent.putExtras(bundle)
+    // or: intent.putExtra("key_name", "Alice")
+    startActivity(intent)
+
+    // Passing data to a Fragment
+    val fragment = MyFragment().apply { arguments = bundle }
+
+    // Retrieving data
+    val name = intent.getStringExtra("key_name")
+    val age = arguments?.getInt("key_age") ?: 0
+    ```
+
+    **Why Bundle instead of a Map?** Bundle uses `Parcel` for efficient binary serialization, which is optimized for IPC (inter-process communication) across Binder boundaries. A standard `Map` is not Parcelable and cannot be efficiently passed across process boundaries.
+
+    Bundle supports: primitives, Strings, arrays, `Parcelable`, `Serializable`, and collections of the above.
+  </Accordion>
+</AccordionGroup>

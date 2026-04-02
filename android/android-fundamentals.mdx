@@ -1,0 +1,345 @@
+---
+title: "Android Fundamentals"
+description: "Core Android interview questions on Context, application components, Android Runtime, ART vs Dalvik, and app startup."
+keywords: ["android", "context", "application components", "ART", "Dalvik", "DEX", "Multidex", "Zygote", "AAPT", "Baseline Profiles", "hot start", "cold start", "warm start", "AOT", "JIT"]
+---
+
+Android fundamentals cover the platform internals and core building blocks every Android developer must understand. This page covers the questions most commonly asked in technical interviews about how Android works under the hood.
+
+## Context and application structure
+
+<AccordionGroup>
+  <Accordion title="What is Context? How is it used?">
+    `Context` is an abstract class that provides access to application-level resources and environment information. It is the gateway to everything Android provides: file system, databases, preferences, system services, and more.
+
+    **Application context** — tied to the lifecycle of the application process. Use it for long-lived operations that must outlast any single `Activity`.
+
+    **Activity context** — tied to the lifecycle of a specific `Activity`. Use it for UI-related operations such as inflating layouts, showing dialogs, or starting activities.
+
+    ```kotlin
+    // Application context — safe for long-lived references
+    val appContext: Context = applicationContext
+
+    // Activity context — use for UI operations
+    val activityContext: Context = this // inside an Activity
+
+    // Getting context from a non-Activity class
+    class MyRepository(private val context: Context) {
+        fun getCacheDir() = context.cacheDir
+    }
+
+    // Starting an Activity from Application context requires NEW_TASK flag
+    val intent = Intent(appContext, MainActivity::class.java).apply {
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    appContext.startActivity(intent)
+    ```
+
+    <Warning>
+      Never hold a reference to an Activity context in a long-lived object (singleton, ViewModel, repository). This prevents the Activity from being garbage-collected and causes a memory leak. Use `applicationContext` instead.
+    </Warning>
+
+    **Key Context operations:**
+    - `getSystemService()` — access system services (e.g., `ClipboardManager`, `ConnectivityManager`)
+    - `getSharedPreferences()` — read/write shared preferences
+    - `startActivity()` / `startService()` — launch components
+    - `getResources()` — access string, drawable, dimension resources
+    - `getCacheDir()` / `getFilesDir()` — app-private storage paths
+  </Accordion>
+
+  <Accordion title="What are the 4 Android application components?">
+    Android defines four fundamental component types. Every component must be declared in `AndroidManifest.xml` (except dynamically registered receivers).
+
+    | Component | Purpose |
+    |---|---|
+    | **Activity** | A single screen with a user interface |
+    | **Service** | Background operations without a UI |
+    | **BroadcastReceiver** | Responds to system-wide or app broadcast events |
+    | **ContentProvider** | Manages shared data and exposes it to other apps |
+
+    Each component has its own lifecycle managed by the Android system. The system can start, stop, and destroy components independently based on resource pressure and user interaction.
+
+    <Note>
+      Intents are the messaging objects used to communicate between components. They are not components themselves but are central to how components interact.
+    </Note>
+  </Accordion>
+
+  <Accordion title="What is the Application class?">
+    The `Application` class is the base class for maintaining global application state. It is instantiated before any other component when the process starts, and there is exactly one instance per app process.
+
+    ```kotlin
+    class MyApplication : Application() {
+
+        override fun onCreate() {
+            super.onCreate()
+            // Initialize singletons, logging, crash reporting, etc.
+            initializeDependencies()
+        }
+
+        private fun initializeDependencies() {
+            // e.g., Timber, Dagger/Hilt component, database
+        }
+
+        companion object {
+            lateinit var instance: MyApplication
+                private set
+        }
+    }
+    ```
+
+    Register it in `AndroidManifest.xml`:
+
+    ```xml
+    <application
+        android:name=".MyApplication"
+        ... >
+    </application>
+    ```
+
+    **Common uses:** dependency injection initialization, global state, crash reporting setup (e.g., Firebase Crashlytics), and registering `ActivityLifecycleCallbacks`.
+
+    <Tip>
+      Avoid putting too much business logic in the `Application` class. Prefer initializing only what absolutely must be ready before the first component starts.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="What is AndroidManifest.xml?">
+    `AndroidManifest.xml` is a required configuration file at the root of every Android app. It provides essential information about the app to the Android build system, the OS, and the Google Play Store.
+
+    **What it declares:**
+    - The app's package name and version
+    - All application components (activities, services, receivers, providers)
+    - Required permissions (`uses-permission`)
+    - Hardware and software features (`uses-feature`)
+    - The minimum and target SDK versions
+    - App metadata (icons, label, theme)
+
+    ```xml
+    <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+        package="com.example.myapp">
+
+        <uses-permission android:name="android.permission.INTERNET" />
+        <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+
+        <application
+            android:name=".MyApplication"
+            android:icon="@mipmap/ic_launcher"
+            android:label="@string/app_name"
+            android:theme="@style/Theme.MyApp">
+
+            <activity android:name=".MainActivity"
+                android:exported="true">
+                <intent-filter>
+                    <action android:name="android.intent.action.MAIN" />
+                    <category android:name="android.intent.category.LAUNCHER" />
+                </intent-filter>
+            </activity>
+
+            <service android:name=".MyService" />
+        </application>
+    </manifest>
+    ```
+
+    The manifest is merged at build time from all modules and libraries. You can use `manifestMerger` rules to control how conflicts are resolved.
+  </Accordion>
+</AccordionGroup>
+
+## Android Runtime
+
+<AccordionGroup>
+  <Accordion title="What is Android Runtime (ART)?">
+    ART (Android Runtime) is the managed runtime used by Android since Android 5.0 (Lollipop). It replaced Dalvik and executes compiled DEX bytecode.
+
+    ART uses **Ahead-of-Time (AOT)** compilation to translate DEX bytecode to native machine code at install time. Starting with Android 7.0, ART uses a hybrid approach that combines AOT, **Just-in-Time (JIT)** compilation, and profile-guided compilation for optimal performance.
+
+    **Key ART features:**
+    - Improved garbage collection with reduced pause times
+    - Better debugging and profiling support
+    - Faster app execution due to native code
+    - Support for 64-bit architectures
+
+    <Note>
+      ART also performs optimization passes during installation, which is why installing an app on ART can take slightly longer than on Dalvik — the trade-off is much faster execution afterward.
+    </Note>
+  </Accordion>
+
+  <Accordion title="What are the differences between Dalvik and ART?">
+    | Aspect | Dalvik | ART |
+    |---|---|---|
+    | Compilation strategy | JIT (at runtime) | AOT + JIT hybrid |
+    | App install time | Faster | Slower (pre-compiles at install) |
+    | App startup time | Slower (JIT warm-up) | Faster |
+    | Runtime performance | Lower | Higher |
+    | Storage usage | Less | More (stores compiled native code) |
+    | GC pauses | Longer | Shorter |
+    | Android version | Up to 4.4 (default) | 5.0+ (default) |
+
+    Dalvik compiled DEX bytecode to native code just-in-time during execution. ART pre-compiles the DEX bytecode to native machine code during app installation using AOT, then further optimizes hot paths at runtime using JIT profile data.
+  </Accordion>
+
+  <Accordion title="What is the difference between JIT and AOT compilation?">
+    **JIT (Just-In-Time) compilation** — code is compiled to native machine code at runtime, just before execution. Dalvik used JIT. The advantage is smaller installed app size; the drawback is warm-up time and CPU/battery cost at runtime.
+
+    **AOT (Ahead-Of-Time) compilation** — code is compiled to native machine code before execution, typically at install time. Early versions of ART used pure AOT. The advantage is faster, more predictable execution; the drawback is longer install time and more storage required.
+
+    **Modern ART (Android 7.0+)** uses a hybrid approach:
+    1. Apps install quickly with minimal AOT compilation
+    2. JIT compilation runs during normal use, collecting profile data
+    3. When the device is idle and charging, the system performs AOT compilation of the hot methods identified by the profile
+
+    This hybrid gives fast installs, fast execution, and efficient storage use.
+  </Accordion>
+
+  <Accordion title="What is DEX?">
+    DEX (Dalvik Executable) is the bytecode format used by Android. When you write Kotlin or Java code and compile it, the Java compiler produces `.class` files (JVM bytecode). The Android build toolchain then converts these `.class` files into one or more `.dex` files using `d8` (the DEX compiler).
+
+    DEX was designed to be compact and efficient for execution on memory-constrained mobile devices. It stores all classes from multiple `.class` files in a single file with a shared constant pool, reducing redundancy.
+
+    The device's runtime (ART) executes DEX bytecode, either by JIT-compiling it at runtime or AOT-compiling it at install time.
+
+    **DEX file limits:** A single DEX file can reference at most 65,536 methods (the "64K limit"). Larger apps require Multidex.
+  </Accordion>
+
+  <Accordion title="What is Multidex in Android?">
+    The DEX format supports at most 65,536 method references per file (this is the "64K limit" caused by a 16-bit method index). Large apps with many libraries can easily exceed this.
+
+    **Multidex** splits the app's bytecode across multiple DEX files (`classes.dex`, `classes2.dex`, etc.). At runtime, the class loader is able to load classes from all of these files.
+
+    **For API 21+ (Android 5.0+):** Multidex is supported natively by ART. No extra configuration is needed beyond enabling it in Gradle.
+
+    **For API < 21:** The legacy `multidex` support library must be used, which patches the class loader at startup.
+
+    ```kotlin
+    // build.gradle.kts (app module)
+    android {
+        defaultConfig {
+            multiDexEnabled = true
+        }
+    }
+
+    dependencies {
+        implementation("androidx.multidex:multidex:2.0.1")
+    }
+    ```
+
+    ```kotlin
+    // Application class (only needed for API < 21 support)
+    class MyApplication : MultiDexApplication() { ... }
+    ```
+
+    <Tip>
+      On API 21+, the `MultiDexApplication` base class is not required. Just setting `multiDexEnabled = true` in Gradle is sufficient.
+    </Tip>
+  </Accordion>
+</AccordionGroup>
+
+## App startup and performance
+
+<AccordionGroup>
+  <Accordion title="How does Zygote make Android apps start faster?">
+    **Zygote** is a special Android process that pre-loads the Android framework classes and resources into memory when the system boots. When a new app process needs to be created, the system **forks** the Zygote process rather than starting a fresh process from scratch.
+
+    **Why forking is faster:**
+    - `fork()` is a very cheap OS operation — it copies the process's virtual memory space using copy-on-write (COW) pages
+    - The forked child process immediately has all the Android framework classes already loaded and initialized
+    - Only app-specific code and resources need to be loaded afterward
+
+    Without Zygote, every app launch would require loading the entire Android framework from disk, dramatically increasing startup times.
+
+    **Process:** System boot → Zygote starts and pre-loads framework → App launch request → System forks Zygote → New process initializes app-specific code → Activity created.
+  </Accordion>
+
+  <Accordion title="What are cold, warm, and hot app starts?">
+    Android defines three types of app startup scenarios based on how much state is already available.
+
+    **Cold start** — The app process does not exist. The system must:
+    1. Create a new app process (fork from Zygote)
+    2. Initialize the `Application` class
+    3. Create the Activity
+    4. Inflate the layout and draw the first frame
+
+    This is the slowest startup type. Cold starts happen after a device reboot or when the app has been killed.
+
+    **Warm start** — The app process still exists, but the Activity was destroyed (e.g., user navigated away and the system reclaimed memory). The system:
+    1. Re-creates the Activity using saved instance state
+    2. Inflates the layout and draws the first frame
+
+    Faster than cold because the process, `Application`, and heap are already initialized.
+
+    **Hot start** — The app process and Activity both exist in memory. The system simply brings the existing Activity back to the foreground (`onResume()`). This is the fastest startup type.
+
+    | Start type | Process exists | Activity exists | Speed |
+    |---|---|---|---|
+    | Cold | No | No | Slowest |
+    | Warm | Yes | No | Medium |
+    | Hot | Yes | Yes | Fastest |
+  </Accordion>
+
+  <Accordion title="What are Baseline Profiles?">
+    Baseline Profiles are a mechanism to speed up app startup and reduce jank on first launch by shipping pre-compiled critical code paths alongside the APK or AAB.
+
+    **How they work:**
+    1. You generate a Baseline Profile by recording which classes and methods are used during critical user journeys (app startup, key screens)
+    2. The profile is bundled with the app in the APK/AAB
+    3. On the device, ART uses the profile to AOT-compile those critical paths at install time
+    4. On the very first launch, the critical code paths execute as compiled native code rather than interpreted DEX
+
+    Without a Baseline Profile, ART must JIT-compile hot paths during the first few launches before it can perform background AOT compilation. This leads to slow first-launch performance.
+
+    **Benefits:**
+    - Up to 40% faster startup on first launch
+    - Reduced jank in critical UI flows
+    - Better experience for users who just installed the app
+
+    <Tip>
+      Use the Jetpack `androidx.profileinstaller` library and the Macrobenchmark library to generate and validate Baseline Profiles automatically as part of your CI pipeline.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="What is AAPT?">
+    **AAPT** (Android Asset Packaging Tool) is the build tool responsible for packaging the app's resources. The current version is **AAPT2**.
+
+    **What AAPT2 does:**
+    - Compiles resource files (XML layouts, drawables, strings) into a binary format optimized for the device
+    - Generates the `R.java` (or `R.kt`) file that contains integer constants referencing each resource
+    - Packages compiled resources into the APK alongside the DEX files
+
+    AAPT2 operates in two phases:
+    1. **Compile** — Each resource file is compiled individually into a flat binary format (`.flat` files). This enables incremental builds — only changed resources need to be recompiled.
+    2. **Link** — All compiled resources are merged and packaged into the APK. The `R` class is generated.
+
+    The AAPT2 split into compile/link phases (compared to AAPT's single-phase approach) significantly speeds up incremental builds.
+  </Accordion>
+
+  <Accordion title="What is the Android project structure?">
+    A standard Android project has the following structure:
+
+    ```
+    MyApp/
+    ├── app/
+    │   ├── src/
+    │   │   ├── main/
+    │   │   │   ├── java/com/example/myapp/   # Kotlin/Java source files
+    │   │   │   ├── res/                       # Resources
+    │   │   │   │   ├── layout/                # XML layout files
+    │   │   │   │   ├── values/                # strings.xml, colors.xml, themes.xml
+    │   │   │   │   ├── drawable/              # Images and drawables
+    │   │   │   │   └── mipmap/                # Launcher icons
+    │   │   │   └── AndroidManifest.xml
+    │   │   ├── test/                          # Unit tests (JVM)
+    │   │   └── androidTest/                   # Instrumented tests (device)
+    │   └── build.gradle.kts                   # App module build script
+    ├── gradle/
+    │   └── libs.versions.toml                 # Version catalog
+    ├── build.gradle.kts                       # Project-level build script
+    └── settings.gradle.kts                    # Module definitions
+    ```
+
+    **Key directories:**
+    - `main/java` — all source code
+    - `main/res` — all resources (layouts, strings, images)
+    - `main/AndroidManifest.xml` — app manifest
+    - `test/` — JVM unit tests run without a device
+    - `androidTest/` — instrumented tests that run on a device or emulator
+  </Accordion>
+</AccordionGroup>

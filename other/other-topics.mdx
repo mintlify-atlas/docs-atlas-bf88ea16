@@ -1,0 +1,728 @@
+---
+title: "Other Topics"
+description: "Miscellaneous Android interview topics: SQLite, Room, push notifications, security, Kotlin Multiplatform, data structures, and best practices."
+keywords: ["SQLite", "Room", "FCM", "Kotlin Multiplatform", "data structures", "Android security", "parcelable", "android interview"]
+---
+
+<Note>
+Data structures and algorithms are consistently tested in Android engineering interviews at product-based companies. Make sure you understand the time/space complexity of each structure and can implement common algorithms from scratch.
+</Note>
+
+<AccordionGroup>
+
+<Accordion title="What is SQLite and how is it used in Android?">
+
+**SQLite** is a lightweight, serverless, self-contained relational database engine embedded directly into Android. Every Android device has SQLite available; no separate database server is required.
+
+Key characteristics:
+- Data is stored in a single `.db` file on the device's internal storage.
+- Supports standard SQL (DDL, DML, queries, transactions).
+- Fully ACID-compliant.
+
+Basic usage with Android's `SQLiteOpenHelper`:
+
+```kotlin
+class AppDatabase(context: Context) : SQLiteOpenHelper(context, "app.db", null, 1) {
+
+    override fun onCreate(db: SQLiteDatabase) {
+        db.execSQL("""
+            CREATE TABLE users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                email TEXT UNIQUE NOT NULL
+            )
+        """.trimIndent())
+    }
+
+    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        db.execSQL("DROP TABLE IF EXISTS users")
+        onCreate(db)
+    }
+
+    fun insertUser(name: String, email: String): Long {
+        val values = ContentValues().apply {
+            put("name", name)
+            put("email", email)
+        }
+        return writableDatabase.insert("users", null, values)
+    }
+}
+```
+
+<Tip>
+For any new project, prefer **Room** over raw `SQLiteOpenHelper`. Room provides compile-time query verification, type-safe access, and LiveData/Flow integration.
+</Tip>
+</Accordion>
+
+<Accordion title="What is the Room database and how does it work?">
+
+**Room** is Jetpack's persistence library that provides an abstraction layer over SQLite. It generates boilerplate SQL code at compile time and verifies your queries, catching errors before runtime.
+
+Room has three main components:
+
+- **`@Entity`** — maps a Kotlin data class to a database table.
+- **`@Dao`** (Data Access Object) — an interface with annotated methods for CRUD operations.
+- **`@Database`** — the top-level class that ties entities and DAOs together and manages the database file.
+
+```kotlin
+// Entity
+@Entity(tableName = "users")
+data class UserEntity(
+    @PrimaryKey(autoGenerate = true) val id: Int = 0,
+    val name: String,
+    val email: String
+)
+
+// DAO
+@Dao
+interface UserDao {
+    @Query("SELECT * FROM users ORDER BY name ASC")
+    fun getAllUsers(): Flow<List<UserEntity>> // reactive — emits on every change
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(user: UserEntity)
+
+    @Delete
+    suspend fun delete(user: UserEntity)
+}
+
+// Database
+@Database(entities = [UserEntity::class], version = 1, exportSchema = false)
+abstract class AppDatabase : RoomDatabase() {
+    abstract fun userDao(): UserDao
+
+    companion object {
+        @Volatile private var instance: AppDatabase? = null
+        fun getInstance(context: Context): AppDatabase = instance ?: synchronized(this) {
+            instance ?: Room.databaseBuilder(context.applicationContext, AppDatabase::class.java, "app.db")
+                .build().also { instance = it }
+        }
+    }
+}
+```
+
+Room uses coroutines (`suspend`) for single-shot operations and `Flow` for reactive queries that emit new results whenever the underlying data changes.
+</Accordion>
+
+<Accordion title="Can we identify users who have uninstalled our app?">
+
+**Not directly.** Android does not provide any API or callback when a user uninstalls an app. Once uninstalled, the app cannot run and cannot be notified.
+
+However, there are **indirect signals** that can suggest an uninstall:
+
+1. **Push notification tokens become invalid**: when a user uninstalls an app, its FCM token is invalidated. If your server tries to send a notification and receives an `UNREGISTERED` error from FCM, the user has likely uninstalled the app.
+
+2. **Absence of analytics events**: if a user was previously active and suddenly stops generating events, they may have uninstalled.
+
+3. **Install tracking services** (e.g., AppsFlyer, Adjust): these services use background server pings and token validation to infer uninstalls, though accuracy is limited.
+
+4. **Silent push notifications** (iOS-only): Android does not support a true silent uninstall ping mechanism.
+
+The most reliable signal is **FCM token invalidation** — track it server-side.
+</Accordion>
+
+<Accordion title="What are Android Development Best Practices?">
+
+<Tip>
+Following these practices consistently distinguishes senior developers in interviews. Be ready to give concrete examples from your projects.
+</Tip>
+
+**Architecture**:
+- Follow MVVM or MVI with Clean Architecture layers (data, domain, presentation).
+- Use a single source of truth for each piece of state.
+- Separate concerns — ViewModels should not reference Android framework classes except `Application`.
+
+**Code quality**:
+- Write unit tests for business logic; use instrumented tests for database and UI.
+- Use Kotlin Coroutines for async work; avoid `Thread` and `AsyncTask`.
+- Apply Dependency Injection (Hilt) for testability.
+
+**Performance**:
+- Measure with Android Studio Profiler before optimising.
+- Avoid allocations on the main thread and in `onDraw()`.
+- Use `LazyColumn`/`RecyclerView` for lists; never load an unbounded list into memory.
+
+**Security**:
+- Never store API keys in source code or `BuildConfig` without encryption.
+- Use HTTPS exclusively; configure `networkSecurityConfig` to block cleartext traffic.
+- Obfuscate release builds with R8.
+
+**Data management**:
+- Use Room for local persistence; never perform database operations on the main thread.
+- Cache network responses appropriately (OkHttp cache, repository pattern).
+- Use `EncryptedSharedPreferences` for sensitive data.
+
+**UI**:
+- Support Dark Theme and dynamic font sizes.
+- Follow Material Design guidelines.
+- Handle all screen sizes and orientations.
+</Accordion>
+
+<Accordion title="What is the difference between React Native and Flutter?">
+
+| Aspect | React Native | Flutter |
+|---|---|---|
+| Language | JavaScript / TypeScript | Dart |
+| UI rendering | Native platform components (bridge) | Custom rendering engine (Skia/Impeller) |
+| Performance | Good; JS-native bridge can be a bottleneck | Excellent; no bridge — compiled to native ARM |
+| Code sharing | JS logic; UI uses native components | Near-100% code reuse across platforms |
+| Hot reload | Yes | Yes |
+| Ecosystem | Large (React, npm) | Growing (pub.dev) |
+| Backed by | Meta | Google |
+| Platform fidelity | High — looks native on each platform | Consistent — same look on all platforms (by default) |
+
+**React Native** is a good choice if your team has JavaScript expertise and you want your app to look and feel native on each platform.
+
+**Flutter** is a good choice for maximum performance, pixel-perfect custom UI, and teams open to learning Dart.
+
+Both support Android and iOS; Flutter also supports web, desktop, and embedded targets.
+</Accordion>
+
+<Accordion title="What metrics should you measure continuously during Android app development?">
+
+Key performance and quality metrics to track:
+
+| Metric | Why it matters |
+|---|---|
+| **App startup time** (cold, warm, hot) | First impression; affects retention |
+| **Frame rate / Jank** | Frames below 60fps degrade perceived smoothness |
+| **ANR rate** | App Not Responding dialogs harm user experience and Play Store ranking |
+| **Crash rate** | Directly impacts user trust and ratings |
+| **Memory usage** | High memory causes OOM and slows other apps |
+| **Battery usage** | Excessive drain leads to uninstalls |
+| **Network call latency** | Affects perceived speed |
+| **APK / AAB size** | Large sizes reduce install conversion |
+| **CPU usage** | High CPU drains battery |
+| **Retention / DAU / MAU** | Business health indicators |
+
+Tools:
+- **Android Vitals** (Play Console) — crash rate, ANR rate, slow rendering.
+- **Firebase Performance Monitoring** — startup time, network latency, custom traces.
+- **Android Studio Profiler** — CPU, memory, network, energy in development.
+- **Baseline Profiles** — measure and improve startup and frame rendering.
+</Accordion>
+
+<Accordion title="How do you prevent API keys from being checked into version control?">
+
+**Never hardcode API keys in source files or `BuildConfig`.** Once committed, the key is in git history even after deletion.
+
+**Recommended approaches**:
+
+1. **`local.properties` file** — add to `.gitignore`, read in `build.gradle.kts`:
+
+```kotlin
+// local.properties (NOT committed)
+MAPS_API_KEY=your_key_here
+
+// build.gradle.kts
+val localProperties = Properties().apply {
+    load(rootProject.file("local.properties").inputStream())
+}
+
+android {
+    defaultConfig {
+        manifestPlaceholders["MAPS_API_KEY"] = localProperties["MAPS_API_KEY"] ?: ""
+    }
+}
+```
+
+2. **Environment variables in CI/CD** — inject keys as environment variables in your CI pipeline (GitHub Actions secrets, Bitrise secrets, etc.). Never print them to logs.
+
+3. **Backend proxy** — do not embed secret keys in the APK at all. Call your own backend, which holds the key and makes the third-party API call.
+
+4. **Android Keystore + encrypted storage** — for runtime secrets, store encrypted values using `EncryptedSharedPreferences` backed by the Android Keystore system.
+
+5. **`.gitignore` file** — always add `local.properties`, `.env`, and any secrets files to `.gitignore`.
+
+```
+# .gitignore
+local.properties
+*.env
+google-services.json   # consider this for projects where it contains secrets
+```
+</Accordion>
+
+<Accordion title="How does Kotlin Multiplatform work?">
+
+**Kotlin Multiplatform (KMP)** allows sharing Kotlin code across multiple platforms (Android, iOS, desktop, web, server) while still writing platform-specific code where needed.
+
+**How it works**:
+- **Common (shared) module**: pure Kotlin code that compiles to all targets. Contains business logic, data models, networking (Ktor), and database (SQLDelight) code.
+- **Platform-specific modules**: use `expect`/`actual` declarations to define platform-specific implementations.
+
+```kotlin
+// Shared code (commonMain)
+expect fun getPlatformName(): String
+
+fun greeting(): String = "Hello from ${getPlatformName()}!"
+
+// Android implementation (androidMain)
+actual fun getPlatformName(): String = "Android ${android.os.Build.VERSION.SDK_INT}"
+
+// iOS implementation (iosMain)
+actual fun getPlatformName(): String = UIDevice.currentDevice.systemName()
+```
+
+**Compilation targets**:
+- Android: compiles to JVM bytecode.
+- iOS: compiles to native ARM binaries via Kotlin/Native.
+- Web: compiles to JavaScript via Kotlin/JS.
+- Server: compiles to JVM.
+
+KMP is **not** a UI framework — it shares logic. For shared UI, use **Compose Multiplatform** (which extends Jetpack Compose to iOS and desktop).
+</Accordion>
+
+<Accordion title="How do you use Memory Heap Dumps to analyse memory issues?">
+
+A **heap dump** is a snapshot of all objects in the JVM/ART heap at a specific moment in time. Analysing it reveals:
+- What objects are in memory.
+- How many instances of each class exist.
+- What is holding a reference to an object (preventing GC).
+
+**How to capture a heap dump in Android**:
+
+1. **Android Studio Memory Profiler**:
+   - Run the app in debug mode.
+   - Open Profiler → Memory.
+   - Click "Dump Java Heap" (camera icon).
+   - The `.hprof` file is captured and displayed automatically.
+
+2. **Programmatically** (for automated tests):
+```kotlin
+Debug.dumpHprofData(File(filesDir, "heap_dump.hprof").absolutePath)
+```
+
+**Analysing the dump**:
+- Look for classes with unexpectedly high instance counts.
+- Find `Activity` or `Fragment` instances that should have been collected.
+- Use "Shallow size" (size of object itself) vs "Retained size" (size of object + everything it keeps alive).
+- Trace the reference chain from GC roots to the leaked object to identify what is holding it.
+
+**LeakCanary** automates this process for debug builds — it watches for destroyed Activities/Fragments and alerts you if they are not collected within a grace period.
+</Accordion>
+
+<Accordion title="How do you implement Dark Theme in Android?">
+
+Android supports Dark Theme (Night Mode) through the `DayNight` theme and resource qualifiers.
+
+**Step 1: Use a DayNight theme** in `themes.xml`:
+```xml
+<style name="AppTheme" parent="Theme.Material3.DayNight">
+    <item name="colorPrimary">@color/primary</item>
+</style>
+```
+
+**Step 2: Provide dark-mode colour resources** in `res/values-night/colors.xml`:
+```xml
+<!-- res/values/colors.xml -->
+<color name="background">#FFFFFF</color>
+
+<!-- res/values-night/colors.xml -->
+<color name="background">#121212</color>
+```
+
+**Step 3: Let the user toggle (optional)**:
+```kotlin
+// Force dark mode
+AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES)
+
+// Follow system setting
+AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM)
+```
+
+**In Jetpack Compose**:
+```kotlin
+@Composable
+fun AppTheme(darkTheme: Boolean = isSystemInDarkTheme(), content: @Composable () -> Unit) {
+    val colorScheme = if (darkTheme) darkColorScheme(...) else lightColorScheme(...)
+    MaterialTheme(colorScheme = colorScheme, content = content)
+}
+```
+
+Use `MaterialTheme.colorScheme.background` and similar semantic colour tokens throughout your Compose UI so they automatically adapt to the active theme.
+</Accordion>
+
+<Accordion title="How do you secure API keys in an Android app?">
+
+API keys embedded in an APK can be extracted by decompiling the APK. Proper key security is critical.
+
+**Strategies from least to most secure**:
+
+1. **Obfuscation with R8/ProGuard** — makes keys harder to find but does not truly protect them. Determined attackers can still extract them.
+
+2. **NDK / JNI** — store the key in native C++ code. Harder to extract than Java/Kotlin strings, but still possible with binary analysis.
+
+3. **Server-side proxy** (**recommended for sensitive keys**) — never put the key in the APK. Your app calls your own backend, which holds the key and forwards the request. The key never touches the client.
+
+4. **Android Keystore System** — for keys generated on-device (e.g., signing keys). The private key material never leaves the hardware-backed Keystore.
+
+5. **Environment variables in CI** + `local.properties` for development — prevents accidental commits.
+
+6. **Certificate pinning** — ensures your app only talks to your server, preventing man-in-the-middle attacks that could expose API calls.
+
+```kotlin
+// Using EncryptedSharedPreferences for runtime secrets
+val masterKey = MasterKey.Builder(context)
+    .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+    .build()
+
+val prefs = EncryptedSharedPreferences.create(
+    context, "secret_prefs", masterKey,
+    EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+    EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+)
+```
+</Accordion>
+
+<Accordion title="What is Cleartext traffic and how do you prevent it?">
+
+**Cleartext traffic** is unencrypted HTTP communication. Data sent over cleartext is visible to anyone on the same network (or an attacker performing a man-in-the-middle attack) — including sensitive user data, authentication tokens, and API responses.
+
+Starting in **Android 9 (API 28)**, cleartext traffic is **blocked by default** for all apps. If you try to make an HTTP (not HTTPS) request, it will fail with a `java.io.IOException: Cleartext HTTP traffic not permitted`.
+
+**How to enforce HTTPS-only**:
+
+Use a **Network Security Configuration** file (`res/xml/network_security_config.xml`):
+
+```xml
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system"/>
+        </trust-anchors>
+    </base-config>
+    <!-- Allow cleartext ONLY for local development server (debug only) -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">10.0.2.2</domain>
+    </domain-config>
+</network-security-config>
+```
+
+Reference it in `AndroidManifest.xml`:
+```xml
+<application
+    android:networkSecurityConfig="@xml/network_security_config"
+    ...>
+```
+
+<Warning>
+Never set `cleartextTrafficPermitted="true"` globally in a production app. Only allow it for specific debug/development domains.
+</Warning>
+</Accordion>
+
+<Accordion title="How does memory usage work in Android?">
+
+Android uses a **managed memory model** where the ART runtime handles allocation and garbage collection. The system can also kill processes to reclaim memory when needed.
+
+**Memory regions**:
+- **Java/Kotlin heap**: objects allocated with `new`. Managed by the GC. Subject to heap size limits per app (typically 256 MB–512 MB depending on device).
+- **Native heap**: memory allocated via JNI/NDK with `malloc`. Not managed by the GC; must be freed manually.
+- **Graphics memory**: textures and buffers managed by the GPU driver.
+- **Stack**: per-thread stack for local variables and call frames.
+
+**Key APIs**:
+```kotlin
+val runtime = Runtime.getRuntime()
+val usedMemory = runtime.totalMemory() - runtime.freeMemory()
+val maxMemory = runtime.maxMemory()
+```
+
+**`onTrimMemory(level)`** — called by the system when memory is low. Respond by releasing caches:
+```kotlin
+override fun onTrimMemory(level: Int) {
+    super.onTrimMemory(level)
+    if (level >= ComponentCallbacks2.TRIM_MEMORY_MODERATE) {
+        imageCache.evictAll() // release non-critical caches
+    }
+}
+```
+
+Memory pressure levels (from least to most severe):
+`TRIM_MEMORY_UI_HIDDEN` → `TRIM_MEMORY_RUNNING_MODERATE` → `TRIM_MEMORY_RUNNING_LOW` → `TRIM_MEMORY_RUNNING_CRITICAL` → `TRIM_MEMORY_BACKGROUND` → `TRIM_MEMORY_MODERATE` → `TRIM_MEMORY_COMPLETE`
+</Accordion>
+
+<Accordion title="What is Annotation Processing in Android?">
+
+Annotation processing is a compile-time mechanism where a tool (**annotation processor**) reads annotations in source code and generates additional source files or performs validation. This happens **before compilation** of the main source files.
+
+Examples of annotation processing in Android:
+- **Room** — processes `@Entity`, `@Dao`, `@Query` to generate `_Impl` classes at compile time.
+- **Dagger/Hilt** — processes `@Inject`, `@Module`, `@Component` to generate the dependency graph.
+- **Glide** — generates a type-safe API wrapper.
+
+```kotlin
+// Your annotated code
+@Entity
+data class User(@PrimaryKey val id: Int, val name: String)
+
+// Room's annotation processor generates at compile time:
+// UserEntity_Impl, UserDao_Impl, AppDatabase_Impl, etc.
+```
+
+**Toolchain evolution**:
+- **`annotationProcessor`** — Java APT; works with Java only.
+- **`kapt`** (Kotlin Annotation Processing Tool) — runs Java annotation processors on Kotlin code; slow (generates Java stubs).
+- **`ksp`** (Kotlin Symbol Processing) — the modern replacement. Reads Kotlin symbols directly; up to 2× faster than kapt. Preferred for new libraries.
+
+```kotlin
+// build.gradle.kts
+plugins { id("com.google.devtools.ksp") }
+dependencies {
+    ksp("androidx.room:room-compiler:2.6.1")
+}
+```
+</Accordion>
+
+<Accordion title="How does the Android Push Notification system work? (FCM flow)">
+
+Android push notifications are delivered through **Firebase Cloud Messaging (FCM)**, which maintains a persistent connection to Google's servers.
+
+**FCM flow**:
+
+1. **App registration**: on first launch, the app calls `FirebaseMessaging.getInstance().token` and receives a unique **FCM registration token**.
+2. **Token sent to server**: the app sends this token to your app server/backend.
+3. **Push triggered**: when you want to send a notification, your server calls the **FCM HTTP v1 API** with the target token and the notification payload.
+4. **FCM delivery**: FCM routes the message to the device via a persistent connection.
+5. **App receives**: the Android system wakes the app (if needed) and delivers the message to `FirebaseMessagingService.onMessageReceived()`.
+6. **Display**: the app displays the notification using `NotificationManager`.
+
+```kotlin
+class MyFirebaseMessagingService : FirebaseMessagingService() {
+
+    override fun onNewToken(token: String) {
+        // Token refreshed — send the new token to your server
+        sendTokenToServer(token)
+    }
+
+    override fun onMessageReceived(message: RemoteMessage) {
+        val title = message.notification?.title ?: "New message"
+        val body = message.notification?.body ?: ""
+        showNotification(title, body)
+    }
+
+    private fun showNotification(title: String, body: String) {
+        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle(title)
+            .setContentText(body)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setAutoCancel(true)
+            .build()
+        NotificationManagerCompat.from(this).notify(NOTIFICATION_ID, notification)
+    }
+}
+```
+</Accordion>
+
+<Accordion title="How do you show a local notification at an exact time?">
+
+Use `AlarmManager` with `setExactAndAllowWhileIdle()` to schedule a `PendingIntent` that fires a `BroadcastReceiver`, which then posts a notification:
+
+```kotlin
+// Schedule the alarm
+val alarmManager = context.getSystemService(AlarmManager::class.java)
+val intent = Intent(context, NotificationReceiver::class.java).apply {
+    putExtra("title", "Reminder")
+    putExtra("message", "Don't forget your meeting!")
+}
+val pendingIntent = PendingIntent.getBroadcast(
+    context, REQUEST_CODE, intent,
+    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+)
+
+// Fires at exact time, even in Doze mode
+alarmManager.setExactAndAllowWhileIdle(
+    AlarmManager.RTC_WAKEUP,
+    triggerAtMillis,
+    pendingIntent
+)
+
+// BroadcastReceiver that shows the notification
+class NotificationReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        val notification = NotificationCompat.Builder(context, CHANNEL_ID)
+            .setContentTitle(intent.getStringExtra("title"))
+            .setContentText(intent.getStringExtra("message"))
+            .setSmallIcon(R.drawable.ic_notification)
+            .setAutoCancel(true)
+            .build()
+        NotificationManagerCompat.from(context).notify(NOTIFICATION_ID, notification)
+    }
+}
+```
+
+<Note>
+On Android 12 (API 31)+, apps must request `SCHEDULE_EXACT_ALARM` or `USE_EXACT_ALARM` permission for `setExactAndAllowWhileIdle`. For non-exact reminders, consider `setAndAllowWhileIdle` or `WorkManager` with a time constraint.
+</Note>
+</Accordion>
+
+<Accordion title="What data structures should Android developers know for interviews?">
+
+<Note>
+Mastering these data structures — including their time/space complexities and typical use cases — is essential for passing technical interviews at product-based companies.
+</Note>
+
+**Arrays**
+- Fixed-size, O(1) random access, O(n) insert/delete.
+- Use for known-size, index-based data.
+
+**LinkedList**
+- O(1) insert/delete at head/tail, O(n) random access.
+- Use for frequent insertions/deletions; rarely used directly in Android (prefer `ArrayDeque`).
+
+**HashMap / HashSet**
+- O(1) average get/put/contains. O(n) worst case (many collisions).
+- In Android: prefer `ArrayMap` (memory-efficient) for small maps or `SparseArray` for `int` keys.
+
+```kotlin
+val map = HashMap<String, Int>()
+map["Alice"] = 30
+val age = map["Alice"] // 30
+
+val sparseArray = SparseArray<String>()
+sparseArray.put(1, "one") // int key, no boxing
+```
+
+**Tree (Binary Search Tree, Balanced BST)**
+- O(log n) search/insert/delete for balanced trees.
+- `TreeMap`/`TreeSet` use a Red-Black tree internally.
+
+**Graph**
+- Adjacency list (common) or adjacency matrix.
+- BFS (shortest path, level-order traversal), DFS (cycle detection, topological sort).
+
+**Stack**
+- LIFO. O(1) push/pop. Use `ArrayDeque` as stack in Kotlin.
+- Applications: back-stack navigation, expression parsing, undo/redo.
+
+```kotlin
+val stack = ArrayDeque<Int>()
+stack.addLast(1); stack.addLast(2)
+val top = stack.removeLast() // 2
+```
+
+**Queue**
+- FIFO. O(1) enqueue/dequeue. Use `ArrayDeque` or `LinkedList`.
+- Applications: BFS, task scheduling, message queues.
+
+```kotlin
+val queue = ArrayDeque<Int>()
+queue.addLast(1); queue.addLast(2)
+val front = queue.removeFirst() // 1
+```
+
+**Priority Queue (Min/Max Heap)**
+- O(log n) insert, O(1) peek, O(log n) poll.
+- Applications: Dijkstra's algorithm, task scheduling by priority.
+
+```kotlin
+val minHeap = PriorityQueue<Int>() // min-heap by default
+minHeap.add(5); minHeap.add(1); minHeap.add(3)
+minHeap.poll() // returns 1 (smallest)
+```
+</Accordion>
+
+<Accordion title="What is the difference between Parcelable and Serializable? Which should you use in Android?">
+
+Both `Parcelable` and `Serializable` are mechanisms for converting objects into a byte stream for transfer (e.g., between Activities via `Intent`, or between processes via `Bundle`).
+
+| Aspect | Parcelable | Serializable |
+|---|---|---|
+| Defined by | Android SDK | Java standard library |
+| Performance | Fast — no reflection, written in optimised C++ | Slow — uses Java reflection |
+| Garbage creation | Minimal | High (many temporary objects) |
+| Implementation | Manual (or use `@Parcelize`) | Just implement the interface (no methods required) |
+| IPC support | Full (designed for Android IPC) | Limited |
+
+**Always prefer `Parcelable` in Android** for inter-component communication.
+
+Using `@Parcelize` (Kotlin plugin) — eliminates boilerplate:
+
+```kotlin
+// build.gradle.kts: id("kotlin-parcelize")
+
+@Parcelize
+data class User(val id: String, val name: String, val age: Int) : Parcelable
+
+// Pass via Intent
+intent.putExtra("user", user)
+// Retrieve
+val user: User? = intent.getParcelableExtra("user")
+```
+
+Only use `Serializable` when interoperating with Java code or when the overhead is irrelevant (e.g., saving to disk, not IPC).
+</Accordion>
+
+<Accordion title="What is the Android Support Library and why was it introduced?">
+
+The **Android Support Library** (now superseded by **AndroidX**) was a set of libraries that provided backward compatibility for newer Android APIs on older devices.
+
+**Why it was introduced**:
+- Android releases new features with each version (e.g., Fragments, RecyclerView, ConstraintLayout).
+- New APIs are only available on devices running the corresponding Android version.
+- The Support Library packaged these features as standalone library modules that could run on older Android versions without waiting for OEM updates.
+
+For example, `Fragment` was introduced in Android 3.0, but the Support Library's `FragmentManager` worked on Android 1.6+.
+
+**AndroidX** replaced the Support Library in 2018 (announced at Google I/O 2018). All new development uses AndroidX (`androidx.*` package names). The Support Library (`android.support.*`) is no longer maintained.
+
+```kotlin
+// Old: android.support.v7.app.AppCompatActivity
+// New: androidx.appcompat.app.AppCompatActivity
+
+// Old: android.support.v4.view.ViewPager
+// New: androidx.viewpager.widget.ViewPager (or ViewPager2)
+```
+
+Today, **always use AndroidX** in new projects. Use the Android Jetpack migration tool to migrate existing projects from the Support Library to AndroidX.
+</Accordion>
+
+<Accordion title="What is Android Data Binding?">
+
+**Android Data Binding** is a Jetpack library that lets you bind UI components in XML layouts directly to data sources in your app using a declarative format, removing the need to call `findViewById()` and manually update view properties.
+
+**Setup** in `build.gradle.kts`:
+```kotlin
+android {
+    buildFeatures { dataBinding = true }
+}
+```
+
+**Layout with data binding expressions**:
+```xml
+<layout xmlns:android="http://schemas.android.com/apk/res/android">
+    <data>
+        <variable name="user" type="com.example.User"/>
+        <variable name="viewModel" type="com.example.UserViewModel"/>
+    </data>
+
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content">
+        <TextView
+            android:text="@{user.name}"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"/>
+        <Button
+            android:text="Save"
+            android:onClick="@{() -> viewModel.onSave()}"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"/>
+    </LinearLayout>
+</layout>
+```
+
+**In Activity/Fragment**:
+```kotlin
+val binding: ActivityUserBinding = DataBindingUtil.setContentView(this, R.layout.activity_user)
+binding.user = viewModel.user
+binding.viewModel = viewModel
+binding.lifecycleOwner = this // enables LiveData observation
+```
+
+Data Binding also supports **two-way binding** (`@={}`) to automatically update the data source when the user changes a view (e.g., typing in a `TextField`).
+
+<Note>
+For new Compose-based projects, Data Binding is not needed — Compose handles this natively. Data Binding is most relevant in View-based apps using MVVM.
+</Note>
+</Accordion>
+
+</AccordionGroup>

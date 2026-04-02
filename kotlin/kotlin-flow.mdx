@@ -1,0 +1,683 @@
+---
+title: "Kotlin Flow API"
+description: "Interview questions and answers on Kotlin Flow including cold vs hot flows, operators, StateFlow, SharedFlow, and exception handling."
+---
+
+Kotlin Flow is the reactive streams API for asynchronous data in Kotlin. It is built on coroutines and integrates naturally with Android's architecture components. This page covers the Flow concepts that appear most frequently in Android interviews.
+
+<AccordionGroup>
+  <Accordion title="What is Kotlin Flow? How does it differ from coroutines?">
+    A `Flow` is a **cold, asynchronous data stream** that emits multiple values sequentially. It is built on coroutines, but while a coroutine produces a single result and completes, a Flow can emit many values over time.
+
+    | | Coroutine / suspend function | Flow |
+    |---|---|---|
+    | Values produced | One | Many |
+    | Execution model | Runs to completion | Emits values lazily, on collection |
+    | Backpressure | N/A | Built-in (suspension-based) |
+    | Cancellation | Via `Job` | Via collection cancellation |
+
+    ```kotlin
+    // suspend function — one result
+    suspend fun fetchUser(): User = apiService.getUser()
+
+    // Flow — multiple values over time
+    fun observeMessages(): Flow<Message> = flow {
+        while (true) {
+            val message = socket.receive()
+            emit(message)
+        }
+    }
+
+    // Collecting a flow in a coroutine
+    viewModelScope.launch {
+        observeMessages().collect { message ->
+            showMessage(message)
+        }
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="Cold Flow vs Hot Flow: what's the difference?">
+    The distinction is about **when the producer starts** and **whether it shares emissions between collectors**.
+
+    **Cold Flow** — The producer block runs independently for each collector. No work is done until someone collects. Each collector gets a fresh, independent stream from the start.
+
+    **Hot Flow** — The producer runs regardless of whether anyone is collecting. Collectors receive only values emitted after they start collecting. Emissions are shared across all active collectors.
+
+    ```kotlin
+    // Cold Flow — each collector triggers its own execution
+    val coldFlow = flow {
+        println("Starting...")  // runs once per collector
+        emit(1)
+        emit(2)
+    }
+
+    coldFlow.collect { println("Collector 1: $it") }
+    coldFlow.collect { println("Collector 2: $it") }
+    // "Starting..." prints twice — each collector runs the block independently
+
+    // Hot Flow — one producer, multiple subscribers
+    val hotFlow = MutableSharedFlow<Int>()
+
+    // One producer
+    scope.launch { hotFlow.emit(1) }
+
+    // Multiple collectors share the same emissions
+    scope.launch { hotFlow.collect { println("A: $it") } }
+    scope.launch { hotFlow.collect { println("B: $it") } }
+    ```
+
+    `flow {}`, `flowOf()`, and `asFlow()` produce cold flows. `StateFlow` and `SharedFlow` are hot flows.
+  </Accordion>
+
+  <Accordion title="Flow builders: flow {}, flowOf(), asFlow()">
+    Kotlin provides several ways to create a Flow.
+
+    **`flow {}`** — The general-purpose builder. Use `emit()` to produce values. The lambda is executed lazily on each collection.
+
+    **`flowOf()`** — Creates a Flow from a fixed set of values.
+
+    **`asFlow()`** — Converts a collection, sequence, or other iterable to a Flow.
+
+    ```kotlin
+    // flow {} — custom logic, emit values conditionally or in a loop
+    val networkFlow: Flow<Update> = flow {
+        while (true) {
+            val update = apiService.pollForUpdates()
+            emit(update)
+            delay(5000)
+        }
+    }
+
+    // flowOf() — fixed values
+    val simpleFlow: Flow<Int> = flowOf(1, 2, 3, 4, 5)
+
+    // asFlow() — from collection
+    val listFlow: Flow<String> = listOf("a", "b", "c").asFlow()
+
+    // asFlow() — from a range
+    val rangeFlow: Flow<Int> = (1..10).asFlow()
+    ```
+  </Accordion>
+
+  <Accordion title="flowOn: what it does and how it changes the dispatcher for upstream operators">
+    `flowOn` changes the `CoroutineContext` (and therefore the dispatcher) of **upstream** operators — everything before it in the chain. It does not affect downstream operators.
+
+    This is how you move Flow production to a background thread while collecting on the main thread.
+
+    ```kotlin
+    val flow = flow {
+            // This block runs on IO dispatcher (upstream)
+            val data = fetchFromDatabase()
+            emit(data)
+        }
+        .map { it.transform() }  // also runs on IO — upstream of flowOn
+        .flowOn(Dispatchers.IO)  // <-- changes context for everything above this line
+        .map { it.toUiModel() }  // runs on Main — downstream, not affected by flowOn
+
+    // Collect on Main
+    viewModelScope.launch {
+        flow.collect { uiModel ->
+            // runs on Main thread (viewModelScope default)
+            updateUi(uiModel)
+        }
+    }
+    ```
+
+    <Note>
+      `flowOn` only affects operators placed before it (upstream). Multiple `flowOn` calls in the same chain are allowed and each applies to the operators above it.
+    </Note>
+  </Accordion>
+
+  <Accordion title="Terminal operators: collect, collectLatest, toList, first, single, fold, reduce, count">
+    Terminal operators **trigger the collection** of a Flow and return a result. A Flow does nothing until a terminal operator is called.
+
+    | Operator | Behavior |
+    |---|---|
+    | `collect {}` | Collects all values, processes each |
+    | `collectLatest {}` | Cancels processing of the previous value if a new one arrives |
+    | `toList()` | Collects all values into a `List` |
+    | `first()` | Returns first value, cancels flow |
+    | `first { }` | Returns first value matching predicate |
+    | `single()` | Returns the only value; throws if 0 or >1 values |
+    | `fold(initial) {}` | Accumulates from initial value |
+    | `reduce {}` | Accumulates without initial value |
+    | `count()` | Returns number of values emitted |
+
+    ```kotlin
+    val numbersFlow = flowOf(1, 2, 3, 4, 5)
+
+    // collect — process every value
+    numbersFlow.collect { println(it) }
+
+    // collectLatest — cancel previous if new arrives (good for search results)
+    queryFlow.collectLatest { query ->
+        delay(500)
+        val results = search(query)
+        showResults(results)
+    }
+
+    // toList — materialize into a list (suspends until complete)
+    val list = numbersFlow.toList()  // [1, 2, 3, 4, 5]
+
+    // first — get the first value and cancel
+    val first = numbersFlow.first()  // 1
+
+    // fold — accumulate with initial value
+    val sum = numbersFlow.fold(0) { acc, n -> acc + n }  // 15
+    ```
+  </Accordion>
+
+  <Accordion title="Intermediate operators: filter, map, zip, flatMapConcat, flatMapMerge, flatMapLatest, retry, debounce, distinctUntilChanged, onEach, take, combine">
+    Intermediate operators transform the flow without triggering collection. They return a new `Flow`.
+
+    ```kotlin
+    val flow = (1..10).asFlow()
+
+    // filter — keep only matching values
+    flow.filter { it % 2 == 0 }  // 2, 4, 6, 8, 10
+
+    // map — transform each value
+    flow.map { it * it }  // 1, 4, 9, 16, ...
+
+    // take — take only the first N values
+    flow.take(3)  // 1, 2, 3
+
+    // distinctUntilChanged — skip consecutive duplicates
+    flowOf(1, 1, 2, 2, 3).distinctUntilChanged()  // 1, 2, 3
+
+    // debounce — emit only after N ms of silence
+    searchQueryFlow.debounce(300)
+
+    // onEach — side effect without changing values (logging, analytics)
+    flow.onEach { Log.d("Flow", "Received: $it") }
+
+    // combine — combine latest values from two flows
+    combine(flow1, flow2) { a, b -> "$a-$b" }
+
+    // retry — retry on failure
+    apiFlow.retry(3) { e -> e is IOException }
+    ```
+  </Accordion>
+
+  <Accordion title="zip operator: how it combines two flows">
+    `zip` combines two flows by pairing values at the same index. The resulting flow emits a combined value each time both flows have emitted at their respective positions. If one flow is faster, it waits for the other. The resulting flow completes when either source flow completes.
+
+    ```kotlin
+    val names = flowOf("Alice", "Bob", "Carol")
+    val scores = flowOf(95, 87, 91)
+
+    names.zip(scores) { name, score ->
+        "$name: $score"
+    }.collect {
+        println(it)
+    }
+    // Alice: 95
+    // Bob: 87
+    // Carol: 91
+    ```
+
+    Contrast with `combine`: `combine` emits whenever either source emits, using the latest value from the other source. `zip` pairs values by position.
+  </Accordion>
+
+  <Accordion title="flatMapConcat vs flatMapMerge vs flatMapLatest: differences">
+    All three transform each value from an upstream Flow into a new Flow and flatten the result, but they differ in how they handle multiple inner flows.
+
+    | Operator | Behavior |
+    |---|---|
+    | `flatMapConcat` | Sequential — waits for inner flow to complete before starting next |
+    | `flatMapMerge` | Concurrent — starts all inner flows simultaneously, merges output |
+    | `flatMapLatest` | Cancels the previous inner flow when a new value arrives upstream |
+
+    ```kotlin
+    val ids = flowOf("1", "2", "3")
+
+    // flatMapConcat — processes 1, then 2, then 3 sequentially
+    ids.flatMapConcat { id ->
+        flow { emit(fetchUser(id)) }
+    }
+
+    // flatMapMerge — fetches all users concurrently, order not guaranteed
+    ids.flatMapMerge { id ->
+        flow { emit(fetchUser(id)) }
+    }
+
+    // flatMapLatest — if a new id arrives before the previous fetch completes,
+    // the previous fetch is cancelled
+    searchQuery.flatMapLatest { query ->
+        flow { emit(search(query)) }
+    }
+    ```
+
+    `flatMapLatest` is ideal for search-as-you-type: each new keystroke cancels the in-flight search for the previous query.
+  </Accordion>
+
+  <Accordion title="StateFlow: what it is, how to create, use in ViewModel">
+    `StateFlow` is a **hot, state-holder flow** that always holds a current value and replays it to new collectors. It replaces `LiveData` in Kotlin-first codebases.
+
+    Key properties:
+    - Always has a current value (requires an initial value).
+    - Replays the current value to new collectors.
+    - Emits only when the value changes (`distinctUntilChanged` semantics built in).
+    - Thread-safe.
+
+    ```kotlin
+    class MyViewModel : ViewModel() {
+        // Private mutable state
+        private val _uiState = MutableStateFlow<UiState>(UiState.Loading)
+
+        // Public read-only state
+        val uiState: StateFlow<UiState> = _uiState.asStateFlow()
+
+        fun loadData() {
+            viewModelScope.launch {
+                _uiState.value = UiState.Loading
+                try {
+                    val data = repository.getData()
+                    _uiState.value = UiState.Success(data)
+                } catch (e: Exception) {
+                    _uiState.value = UiState.Error(e.message ?: "Unknown error")
+                }
+            }
+        }
+    }
+
+    // In Activity/Fragment — collect in a lifecycle-aware way
+    lifecycleScope.launch {
+        repeatOnLifecycle(Lifecycle.State.STARTED) {
+            viewModel.uiState.collect { state ->
+                when (state) {
+                    is UiState.Loading -> showLoading()
+                    is UiState.Success -> showData(state.data)
+                    is UiState.Error   -> showError(state.message)
+                }
+            }
+        }
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="SharedFlow: what it is, replay, extraBufferCapacity">
+    `SharedFlow` is a **hot flow** that broadcasts values to multiple collectors. Unlike `StateFlow`, it does not require an initial value and can be configured with a replay cache and buffer.
+
+    Key parameters:
+    - **`replay`** — Number of previously emitted values replayed to new collectors (default: 0).
+    - **`extraBufferCapacity`** — Additional buffer slots beyond the replay cache.
+    - **`onBufferOverflow`** — Strategy when buffer is full: `SUSPEND`, `DROP_OLDEST`, or `DROP_LATEST`.
+
+    ```kotlin
+    // SharedFlow for one-time events (no replay)
+    class EventViewModel : ViewModel() {
+        private val _events = MutableSharedFlow<UiEvent>()
+        val events: SharedFlow<UiEvent> = _events.asSharedFlow()
+
+        fun showSnackbar(message: String) {
+            viewModelScope.launch {
+                _events.emit(UiEvent.ShowSnackbar(message))
+            }
+        }
+    }
+
+    // SharedFlow with replay — new collectors get last 3 emissions
+    val sharedFlow = MutableSharedFlow<Int>(
+        replay = 3,
+        extraBufferCapacity = 10,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST
+    )
+    ```
+  </Accordion>
+
+  <Accordion title="StateFlow vs SharedFlow: when to use each">
+    <Tabs>
+      <Tab title="StateFlow">
+        Use `StateFlow` when:
+        - You need to represent **UI state** — there is always a current value.
+        - New subscribers should immediately receive the latest value.
+        - You want `LiveData`-like semantics with Kotlin Flow.
+
+        ```kotlin
+        // StateFlow — UI state with a current value
+        private val _uiState = MutableStateFlow(UiState.Initial)
+        val uiState: StateFlow<UiState> = _uiState.asStateFlow()
+
+        // Always has a value
+        println(uiState.value)  // UiState.Initial
+
+        // New collector receives current value immediately on subscription
+        uiState.collect { state -> render(state) }
+        ```
+
+        **Characteristics:**
+        - Requires initial value
+        - Replay = 1 (always)
+        - Equality check — does not re-emit if value is the same
+        - Always has `.value` property
+      </Tab>
+      <Tab title="SharedFlow">
+        Use `SharedFlow` when:
+        - You need **events** — one-time actions like navigation, snackbars, dialogs.
+        - There is no meaningful "current" value — collectors should miss events emitted before they subscribed (unless you configure replay).
+        - You need configurable replay, buffer, or overflow strategy.
+
+        ```kotlin
+        // SharedFlow — events without a persistent state
+        private val _events = MutableSharedFlow<UiEvent>()
+        val events: SharedFlow<UiEvent> = _events.asSharedFlow()
+
+        // emit() suspends if there is no buffer space
+        viewModelScope.launch {
+            _events.emit(UiEvent.Navigate(Route.Home))
+        }
+
+        // tryEmit() — non-suspending, returns false if buffer is full
+        _events.tryEmit(UiEvent.ShowToast("Hello"))
+        ```
+
+        **Characteristics:**
+        - No initial value required
+        - Configurable replay (default: 0)
+        - No equality check — emits every value
+        - No `.value` property
+      </Tab>
+      <Tab title="Comparison table">
+        | Feature | StateFlow | SharedFlow |
+        |---|---|---|
+        | Initial value | Required | Not required |
+        | Current value (`.value`) | Yes | No |
+        | Default replay | 1 | 0 (configurable) |
+        | Equality check | Yes (skips duplicates) | No |
+        | Best for | UI state | One-time events |
+        | Equivalent to LiveData | Yes | No direct equivalent |
+        | Buffer configuration | No | Yes |
+        | Multiple collectors | Yes | Yes |
+      </Tab>
+    </Tabs>
+  </Accordion>
+
+  <Accordion title="stateIn vs shareIn operators">
+    These operators convert a cold `Flow` into a hot `StateFlow` or `SharedFlow`, sharing a single upstream subscription among multiple collectors.
+
+    **`stateIn`** — Converts a cold Flow into a `StateFlow`. Requires an initial value.
+
+    **`shareIn`** — Converts a cold Flow into a `SharedFlow`. Configurable replay.
+
+    Both take a `SharingStarted` strategy:
+    - `SharingStarted.Eagerly` — Starts immediately, regardless of collectors.
+    - `SharingStarted.Lazily` — Starts on first collector, never stops.
+    - `SharingStarted.WhileSubscribed(stopTimeoutMillis)` — Starts on first collector, stops when last collector leaves (after timeout).
+
+    ```kotlin
+    class MyViewModel(private val repository: Repository) : ViewModel() {
+
+        // stateIn — expose a cold flow as StateFlow
+        val userData: StateFlow<User?> = repository.getUserFlow()
+            .stateIn(
+                scope = viewModelScope,
+                started = SharingStarted.WhileSubscribed(5000),
+                initialValue = null
+            )
+
+        // shareIn — expose a cold flow as SharedFlow
+        val updates: SharedFlow<Update> = repository.getUpdateFlow()
+            .shareIn(
+                scope = viewModelScope,
+                started = SharingStarted.WhileSubscribed(5000),
+                replay = 1
+            )
+    }
+    ```
+
+    `WhileSubscribed(5000)` is the recommended default for Android: it stops upstream collection 5 seconds after the last subscriber leaves (e.g., when the app goes to background), saving resources while tolerating brief configuration changes.
+  </Accordion>
+
+  <Accordion title="callbackFlow: converting callbacks to Flow">
+    `callbackFlow` is a Flow builder designed for converting callback-based APIs (e.g., listeners, SDK callbacks) into a Flow. It provides a `ProducerScope` with `send()` and `trySend()` for emitting values, and `awaitClose {}` to clean up when the flow is cancelled.
+
+    ```kotlin
+    // Wrapping a LocationListener in a Flow
+    fun LocationManager.locationFlow(provider: String): Flow<Location> =
+        callbackFlow {
+            val listener = LocationListener { location ->
+                trySend(location)  // non-suspending emit
+            }
+
+            requestLocationUpdates(provider, 0L, 0f, listener)
+
+            // Clean up when the flow collector cancels
+            awaitClose {
+                removeUpdates(listener)
+            }
+        }
+
+    // Usage
+    locationManager.locationFlow(LocationManager.GPS_PROVIDER)
+        .conflate()  // drop intermediate values if collector is slow
+        .collect { location ->
+            updateMap(location)
+        }
+    ```
+
+    Always use `awaitClose {}` in `callbackFlow` — it is required and ensures the listener is properly removed when the flow is cancelled.
+  </Accordion>
+
+  <Accordion title="channelFlow: what it is">
+    `channelFlow` is similar to `callbackFlow` but designed for flows that need to emit from multiple coroutines concurrently. It provides a coroutine scope inside the builder block, allowing you to `launch` multiple coroutines that all emit into the same flow.
+
+    ```kotlin
+    // channelFlow — emit from multiple coroutines
+    val multiSourceFlow = channelFlow {
+        launch {
+            // source 1
+            repeat(5) {
+                send("Source A: $it")
+                delay(100)
+            }
+        }
+        launch {
+            // source 2
+            repeat(5) {
+                send("Source B: $it")
+                delay(150)
+            }
+        }
+        // Flow completes when all launched coroutines complete
+    }
+    ```
+
+    Use `channelFlow` when you need concurrent producers within the flow builder. Use `callbackFlow` when wrapping callback-based APIs.
+  </Accordion>
+
+  <Accordion title="collect vs collectLatest: difference">
+    Both are terminal operators that trigger flow collection, but they differ in how they handle a new value arriving before processing of the previous value is complete.
+
+    **`collect`** — Processes each value fully before accepting the next. If processing is slow, values queue up.
+
+    **`collectLatest`** — Cancels the processing of the previous value when a new value arrives. Only the latest value matters.
+
+    ```kotlin
+    // collect — processes every value, even if slow
+    flow { emit(1); emit(2); emit(3) }
+        .collect { value ->
+            delay(500)  // slow processing
+            println("Collected: $value")
+        }
+    // Collected: 1
+    // Collected: 2
+    // Collected: 3
+
+    // collectLatest — cancels previous if new value arrives
+    flow { emit(1); emit(2); emit(3) }
+        .collectLatest { value ->
+            delay(500)  // if next value arrives before 500ms, this is cancelled
+            println("Collected: $value")
+        }
+    // Collected: 3  (only the last value's processing completes)
+    ```
+
+    Use `collectLatest` for UI patterns where only the latest result matters — e.g., displaying search results as the user types.
+  </Accordion>
+
+  <Accordion title="Exception handling in Flow: catch operator, retry, onCompletion">
+    Flow provides several operators for handling exceptions and completion.
+
+    **`catch`** — Catches exceptions from upstream operators. Does not catch exceptions in the `collect` block itself.
+
+    **`retry`** — Retries the upstream flow on failure, with a configurable count and predicate.
+
+    **`onCompletion`** — Runs a callback when the flow completes (normally or with an exception). Receives the exception as a nullable parameter.
+
+    ```kotlin
+    // catch — handle upstream exceptions
+    repository.getDataFlow()
+        .catch { e ->
+            when (e) {
+                is IOException -> emit(CachedData.loadFromCache())
+                else -> throw e  // rethrow unexpected exceptions
+            }
+        }
+        .collect { data -> showData(data) }
+
+    // retry — retry on transient failures
+    repository.getDataFlow()
+        .retry(3) { e ->
+            e is IOException  // only retry on IO exceptions
+        }
+        .collect { data -> showData(data) }
+
+    // onCompletion — cleanup or final logging
+    repository.getDataFlow()
+        .onCompletion { cause ->
+            if (cause != null) {
+                Log.e("Flow", "Flow completed with error", cause)
+            } else {
+                Log.d("Flow", "Flow completed normally")
+            }
+        }
+        .collect { data -> showData(data) }
+
+    // Combining all three
+    repository.getDataFlow()
+        .retry(2) { it is IOException }
+        .catch { emit(fallbackData) }
+        .onCompletion { Log.d("Flow", "Done") }
+        .collect { showData(it) }
+    ```
+
+    <Warning>
+      The `catch` operator only catches exceptions thrown by upstream operators (before `catch` in the chain). Exceptions thrown inside `collect {}` are not caught by `catch` — wrap the `collect` call in a `try/catch` block for those.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="Unit testing Flow with Turbine or runTest">
+    Testing flows requires a coroutine test environment and a way to assert on emitted values.
+
+    **`runTest`** (from `kotlinx-coroutines-test`) — Runs a test coroutine with a `TestScope` that controls time, allowing `delay()` to skip without real waiting.
+
+    **Turbine** (from `app.cash.turbine`) — A library that simplifies Flow testing with `awaitItem()`, `awaitComplete()`, `awaitError()` APIs.
+
+    ```kotlin
+    // Without Turbine — manual collection in a list
+    @Test
+    fun testCounterFlow() = runTest {
+        val results = mutableListOf<Int>()
+        val job = launch {
+            counterFlow.toList(results)
+        }
+        advanceTimeBy(3000)
+        job.cancel()
+        assertEquals(listOf(0, 1, 2), results)
+    }
+
+    // With Turbine — concise and readable
+    @Test
+    fun testUserFlow() = runTest {
+        val viewModel = MyViewModel(fakeRepository)
+
+        viewModel.uiState.test {
+            // Initial state
+            assertEquals(UiState.Loading, awaitItem())
+
+            // Trigger load
+            viewModel.loadData()
+
+            // Success state
+            val success = awaitItem()
+            assertIs<UiState.Success>(success)
+            assertEquals("Alice", success.data.name)
+
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+    ```
+
+    ```kotlin
+    // Testing StateFlow with Turbine
+    @Test
+    fun testStateFlow() = runTest {
+        val stateFlow = MutableStateFlow(0)
+
+        stateFlow.test {
+            assertEquals(0, awaitItem())   // initial value
+            stateFlow.value = 1
+            assertEquals(1, awaitItem())
+            stateFlow.value = 1            // same value — not emitted (distinctUntilChanged)
+            stateFlow.value = 2
+            assertEquals(2, awaitItem())
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="StateFlow vs LiveData: comparison">
+    `StateFlow` is the Kotlin-first replacement for `LiveData` in most modern Android codebases.
+
+    | Feature | LiveData | StateFlow |
+    |---|---|---|
+    | Language | Java/Kotlin | Kotlin only |
+    | Lifecycle awareness | Built-in | Requires `repeatOnLifecycle` |
+    | Initial value | Not required | Required |
+    | Null safety | Nullable by default | Type-safe |
+    | Transformation | `map`, `switchMap` (limited) | Full Flow operator set |
+    | Testing | `InstantTaskExecutorRule` | `runTest`, Turbine |
+    | Thread-safe updates | `postValue()` vs `setValue()` | Thread-safe `.value` |
+    | Operators | Limited Transformations | Full coroutine operators |
+
+    ```kotlin
+    // LiveData approach
+    class OldViewModel : ViewModel() {
+        private val _user = MutableLiveData<User>()
+        val user: LiveData<User> = _user
+
+        fun load() {
+            viewModelScope.launch {
+                _user.value = repository.getUser()
+            }
+        }
+    }
+
+    // StateFlow approach — preferred in new code
+    class NewViewModel : ViewModel() {
+        private val _user = MutableStateFlow<User?>(null)
+        val user: StateFlow<User?> = _user.asStateFlow()
+
+        fun load() {
+            viewModelScope.launch {
+                _user.value = repository.getUser()
+            }
+        }
+    }
+
+    // Collecting StateFlow safely in Fragment/Activity
+    lifecycleScope.launch {
+        repeatOnLifecycle(Lifecycle.State.STARTED) {
+            viewModel.user.collect { user -> render(user) }
+        }
+    }
+    ```
+
+    <Note>
+      `repeatOnLifecycle` is required when collecting `StateFlow` in an Activity or Fragment. It ensures collection stops when the app goes to background (STOPPED state) and resumes when it returns to STARTED — preventing wasted work and potential crashes.
+    </Note>
+  </Accordion>
+</AccordionGroup>
